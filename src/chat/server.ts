@@ -2,6 +2,7 @@
 import { consola } from "consola";
 import { createBot } from "./bot.ts";
 import { loadAppConfig } from "../config/index.ts";
+import { generateStartupMessage } from "./startup.ts";
 
 export interface ServerOptions {
   port?: number;
@@ -22,6 +23,10 @@ export async function startServer(options: ServerOptions = {}) {
   await stateAdapter.connect();
   await chat.initialize();
   consola.info("[server] bot initialized");
+
+  // 生成启动消息（仅日志输出，不发送到 chat）
+  const startupMsg = await generateStartupMessage(config);
+  consola.info(`\n${startupMsg.replace(/\*\*/g, "").replace(/_/g, "")}\n`);
 
   // 启动 Bun.serve
   const server = Bun.serve({

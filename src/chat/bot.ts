@@ -11,6 +11,7 @@ import { TopicStateStore, type RunContext } from "../topic/state.ts";
 import { mergeTopicContext, formatContext } from "../topic/context.ts";
 import type { Yee88Event, ResumeToken } from "../model.ts";
 import { type AppConfig, projectForChat, resolveProject } from "../config/index.ts";
+import { isAuthorized, unauthorizedMessage } from "./guard.ts";
 
 /** Bot 线程状态 */
 interface BotThreadState {
@@ -84,6 +85,13 @@ export function createBot(config: AppConfig) {
   async function handleMessage(thread: Thread<BotThreadState>, message: Message): Promise<void> {
     const text = message.text.trim();
     if (!text) return;
+
+    // 权限验证
+    if (!isAuthorized(message, config)) {
+      consola.warn(`[bot] unauthorized user: ${message.author.userId} (${message.author.userName})`);
+      await thread.post(unauthorizedMessage());
+      return;
+    }
 
     const chatId = thread.channelId;
     const ownerId = message.author.userId;

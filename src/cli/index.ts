@@ -22,6 +22,13 @@ async function main() {
       break;
     }
 
+    case "onboard":
+    case "setup": {
+      const { runOnboarding } = await import("./onboard.ts");
+      await runOnboarding();
+      break;
+    }
+
     case "init": {
       const projectPath = args[1] ?? process.cwd();
       const alias = args[2] ?? projectPath.split("/").pop()?.toLowerCase() ?? "default";
@@ -131,6 +138,7 @@ yee88 - Telegram Bot bridge for OpenCode CLI
 
 Commands:
   run [--port N] [--config path]  Start the bot server
+  onboard                         Interactive setup wizard
   init [path] [alias]             Register a project
   config path                     Show config file path
   config show                     Show current config
