@@ -29,18 +29,9 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
-    "dingtalk-stream": "^2.1.4",
     "tsdown": "^0.17.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
-  },
-  "peerDependencies": {
-    "dingtalk-stream": "^2.1.4"
-  },
-  "peerDependenciesMeta": {
-    "dingtalk-stream": {
-      "optional": true
-    }
   },
   "keywords": [
     "chat",

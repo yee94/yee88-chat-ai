@@ -820,6 +820,8 @@ export { getAccessToken } from "./auth";
 export {
   createStreamClient,
   DingTalkStreamClient,
+  TOPIC_ROBOT,
+  TOPIC_CARD,
   type StreamClientConfig,
   type StreamMessageHandler,
   type StreamState,

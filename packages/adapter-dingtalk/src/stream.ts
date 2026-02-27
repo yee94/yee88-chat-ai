@@ -1,21 +1,30 @@
 /**
- * DingTalk Stream mode support.
+ * DingTalk Stream mode client.
  *
- * Stream mode uses WebSocket long-polling instead of HTTP webhooks,
+ * Native implementation without external dependencies.
+ * Uses WebSocket long-polling instead of HTTP webhooks,
  * eliminating the need for a public IP address.
  *
- * @see https://github.com/open-dingtalk/dingtalk-stream-sdk-nodejs
  * @see https://opensource.dingtalk.com/developerpedia/docs/learn/stream/overview
  */
 
 import type { Logger } from "chat";
 import type { DingTalkAdapterConfig, DingTalkInboundMessage } from "./types";
 
+// DingTalk Stream API endpoints
+const GATEWAY_URL = "https://api.dingtalk.com/v1.0/gateway/connections/open";
+
+/** Robot message callback topic */
+export const TOPIC_ROBOT = "/v1.0/im/bot/messages/get";
+
+/** Card callback topic */
+export const TOPIC_CARD = "/v1.0/card/instances/callback";
+
 /**
  * Stream client configuration.
  */
 export interface StreamClientConfig extends DingTalkAdapterConfig {
-  /** Enable debug logging in the stream client. */
+  /** Enable debug logging. */
   debug?: boolean;
   /** Auto reconnect on disconnect (default: true). */
   autoReconnect?: boolean;
@@ -25,6 +34,29 @@ export interface StreamClientConfig extends DingTalkAdapterConfig {
   initialReconnectDelay?: number;
   /** Maximum reconnect delay in ms (default: 30000). */
   maxReconnectDelay?: number;
+  /** Subscriptions (default: robot messages). */
+  subscriptions?: Array<{ type: "EVENT" | "CALLBACK"; topic: string }>;
+}
+
+/**
+ * Stream downstream message from DingTalk.
+ */
+export interface StreamDownstreamMessage {
+  specVersion: string;
+  type: string;
+  headers: {
+    appId: string;
+    connectionId: string;
+    contentType: string;
+    messageId: string;
+    time: string;
+    topic: string;
+    eventType?: string;
+    eventBornTime?: string;
+    eventId?: string;
+    eventCorpId?: string;
+  };
+  data: string;
 }
 
 /**
@@ -51,18 +83,18 @@ export type StreamState =
 export interface StreamClientEvents {
   onStateChange?: (state: StreamState, error?: string) => void;
   onMessage?: StreamMessageHandler;
+  onRawMessage?: (msg: StreamDownstreamMessage) => void;
 }
 
 /**
- * DingTalk Stream client wrapper.
+ * DingTalk Stream client.
  *
- * This is a thin wrapper around the official `dingtalk-stream` SDK
- * that integrates with the Chat SDK adapter pattern.
+ * Native WebSocket implementation for receiving robot messages
+ * without requiring a public webhook endpoint.
  *
  * @example
  * ```typescript
- * import { DWClient, TOPIC_ROBOT } from "dingtalk-stream";
- * import { createStreamClient } from "@chat-adapter/dingtalk";
+ * import { createStreamClient, TOPIC_ROBOT } from "@chat-adapter/dingtalk";
  *
  * const stream = createStreamClient({
  *   clientId: process.env.DINGTALK_CLIENT_ID!,
@@ -71,7 +103,7 @@ export interface StreamClientEvents {
  *
  * stream.onMessage((message, ack) => {
  *   console.log("Received:", message);
- *   ack(); // Acknowledge the message
+ *   ack();
  * });
  *
  * await stream.connect();
@@ -82,10 +114,24 @@ export class DingTalkStreamClient {
   private logger?: Logger;
   private state: StreamState = "disconnected";
   private events: StreamClientEvents = {};
-  private client: any = null;
+  private socket: WebSocket | null = null;
   private reconnectAttempts = 0;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
+  private heartbeatTimer?: ReturnType<typeof setTimeout>;
   private stopped = false;
+  private connectionId?: string;
+
+  /** Message deduplication cache (msgId -> timestamp). */
+  private readonly processedMessages = new Map<string, number>();
+  /** Max age for dedup entries (5 minutes). */
+  private readonly dedupMaxAge = 5 * 60 * 1000;
+  /** Max entries in dedup cache. */
+  private readonly dedupMaxSize = 1000;
+
+  private readonly heartbeatInterval = 10000; // 10 seconds
+  private readonly defaultSubscriptions = [
+    { type: "CALLBACK" as const, topic: TOPIC_ROBOT },
+  ];
 
   constructor(config: StreamClientConfig, logger?: Logger) {
     this.config = config;
@@ -108,7 +154,7 @@ export class DingTalkStreamClient {
   }
 
   /**
-   * Register message handler.
+   * Register message handler for robot messages.
    */
   onMessage(handler: StreamMessageHandler): this {
     this.events.onMessage = handler;
@@ -116,12 +162,15 @@ export class DingTalkStreamClient {
   }
 
   /**
+   * Register raw message handler for all downstream messages.
+   */
+  onRawMessage(handler: StreamClientEvents["onRawMessage"]): this {
+    this.events.onRawMessage = handler;
+    return this;
+  }
+
+  /**
    * Connect to DingTalk Stream.
-   *
-   * Requires the `dingtalk-stream` package to be installed:
-   * ```bash
-   * pnpm add dingtalk-stream
-   * ```
    */
   async connect(): Promise<void> {
     if (this.state === "connected" || this.state === "connecting") {
@@ -132,58 +181,25 @@ export class DingTalkStreamClient {
     this.setState("connecting");
 
     try {
-      // Dynamic import to make dingtalk-stream an optional peer dependency.
-      const { DWClient, TOPIC_ROBOT } = await import("dingtalk-stream");
+      // Get WebSocket endpoint from gateway
+      const endpoint = await this.getEndpoint();
+      this.log("debug", "Got stream endpoint", { endpoint });
 
-      this.client = new DWClient({
-        clientId: this.config.clientId,
-        clientSecret: this.config.clientSecret,
-        debug: this.config.debug ?? false,
-        keepAlive: false,
-      });
+      // Connect WebSocket
+      await this.connectWebSocket(endpoint);
 
-      // Disable built-in reconnect; we manage it ourselves.
-      (this.client as any).config.autoReconnect = false;
-
-      // Register message callback.
-      this.client.registerCallbackListener(TOPIC_ROBOT, async (res: any) => {
-        const messageId = res.headers?.messageId;
-
-        const acknowledge = () => {
-          if (!messageId) return;
-          try {
-            this.client.socketCallBackResponse(messageId, { success: true });
-          } catch (error) {
-            this.logger?.warn?.("Failed to acknowledge message", {
-              messageId,
-              error: String(error),
-            });
-          }
-        };
-
-        try {
-          const data = JSON.parse(res.data) as DingTalkInboundMessage;
-          await this.events.onMessage?.(data, acknowledge);
-        } catch (error) {
-          this.logger?.error?.("Failed to process stream message", {
-            error: String(error),
-          });
-          acknowledge(); // Still ack to prevent redelivery.
-        }
-      });
-
-      await this.client.connect();
       this.reconnectAttempts = 0;
       this.setState("connected");
-
-      this.logger?.info?.("DingTalk Stream connected", {
+      this.log("info", "DingTalk Stream connected", {
         clientId: this.config.clientId,
+        connectionId: this.connectionId,
       });
 
-      // Set up disconnect handler for auto-reconnect.
-      this.setupDisconnectHandler();
+      // Start heartbeat
+      this.startHeartbeat();
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
+      this.log("error", "Connection failed", { error: errorMsg });
       this.setState("disconnected", errorMsg);
 
       if (this.shouldReconnect()) {
@@ -199,26 +215,278 @@ export class DingTalkStreamClient {
    */
   async disconnect(): Promise<void> {
     this.stopped = true;
-    this.clearReconnectTimer();
+    this.clearTimers();
 
-    if (this.client) {
+    if (this.socket) {
       try {
-        await this.client.disconnect?.();
-      } catch (error) {
-        this.logger?.warn?.("Error during disconnect", {
-          error: String(error),
-        });
+        this.socket.close(1000, "Client disconnect");
+      } catch {
+        // Ignore close errors
       }
-      this.client = null;
+      this.socket = null;
     }
 
     this.setState("stopped");
-    this.logger?.info?.("DingTalk Stream disconnected");
+    this.log("info", "DingTalk Stream disconnected");
   }
 
-  private setState(state: StreamState, error?: string): void {
-    this.state = state;
-    this.events.onStateChange?.(state, error);
+  /**
+   * Send acknowledgement for a message.
+   */
+  sendAck(messageId: string, success = true): void {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+      this.log("warn", "Cannot send ack, socket not open", { messageId });
+      return;
+    }
+
+    const response = {
+      code: success ? 200 : 500,
+      headers: { contentType: "application/json" },
+      message: success ? "OK" : "FAIL",
+      data: JSON.stringify({ success }),
+    };
+
+    this.socket.send(
+      JSON.stringify({
+        specVersion: "1.0",
+        type: "SYSTEM",
+        headers: {
+          messageId,
+          contentType: "application/json",
+        },
+        data: JSON.stringify(response),
+      }),
+    );
+  }
+
+  // ─── Private Methods ───────────────────────────────────────────────
+
+  private async getEndpoint(): Promise<string> {
+    const subscriptions =
+      this.config.subscriptions ?? this.defaultSubscriptions;
+
+    const response = await fetch(GATEWAY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        clientId: this.config.clientId,
+        clientSecret: this.config.clientSecret,
+        subscriptions,
+        ua: "chat-adapter-dingtalk/0.1.0",
+      }),
+    });
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new Error(
+        `Failed to get stream endpoint: ${response.status} ${text}`,
+      );
+    }
+
+    const data = (await response.json()) as {
+      endpoint: string;
+      ticket: string;
+    };
+
+    if (!data.endpoint) {
+      throw new Error("No endpoint in gateway response");
+    }
+
+    // Append ticket to endpoint URL
+    const url = new URL(data.endpoint);
+    url.searchParams.set("ticket", data.ticket);
+    return url.toString();
+  }
+
+  private connectWebSocket(endpoint: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      try {
+        this.socket = new WebSocket(endpoint);
+      } catch (error) {
+        reject(error);
+        return;
+      }
+
+      const timeout = setTimeout(() => {
+        reject(new Error("WebSocket connection timeout"));
+        this.socket?.close();
+      }, 30000);
+
+      this.socket.onopen = () => {
+        clearTimeout(timeout);
+        this.log("debug", "WebSocket opened");
+        resolve();
+      };
+
+      this.socket.onerror = (event) => {
+        clearTimeout(timeout);
+        const error = new Error("WebSocket error");
+        this.log("error", "WebSocket error", { event });
+        reject(error);
+      };
+
+      this.socket.onclose = (event) => {
+        clearTimeout(timeout);
+        this.log("info", "WebSocket closed", {
+          code: event.code,
+          reason: event.reason,
+        });
+        this.handleDisconnect(event.code, event.reason);
+      };
+
+      this.socket.onmessage = (event) => {
+        this.handleMessage(event.data as string);
+      };
+    });
+  }
+
+  private handleMessage(data: string): void {
+    let msg: StreamDownstreamMessage;
+    try {
+      msg = JSON.parse(data) as StreamDownstreamMessage;
+    } catch {
+      this.log("warn", "Failed to parse stream message", { data });
+      return;
+    }
+
+    // Handle system messages (connection info, pong, etc.)
+    if (msg.type === "SYSTEM") {
+      this.handleSystemMessage(msg);
+      return;
+    }
+
+    // Emit raw message event
+    this.events.onRawMessage?.(msg);
+
+    // Handle robot callback messages
+    if (
+      msg.headers.topic === TOPIC_ROBOT &&
+      msg.type === "CALLBACK"
+    ) {
+      this.handleRobotMessage(msg);
+    }
+  }
+
+  private handleSystemMessage(msg: StreamDownstreamMessage): void {
+    try {
+      const data = JSON.parse(msg.data) as Record<string, unknown>;
+
+      // Connection established message
+      if (data.connectionId) {
+        this.connectionId = data.connectionId as string;
+        this.log("debug", "Connection ID received", {
+          connectionId: this.connectionId,
+        });
+      }
+    } catch {
+      // Ignore parse errors for system messages
+    }
+  }
+
+  private handleRobotMessage(msg: StreamDownstreamMessage): void {
+    const messageId = msg.headers.messageId;
+
+    const acknowledge = () => {
+      this.sendAck(messageId, true);
+    };
+
+    try {
+      const robotMsg = JSON.parse(msg.data) as DingTalkInboundMessage;
+
+      // Deduplication: check if we've already processed this message
+      const dedupKey = robotMsg.msgId || messageId;
+      if (this.isMessageProcessed(dedupKey)) {
+        this.log("debug", "Skipping duplicate message", { dedupKey });
+        acknowledge();
+        return;
+      }
+      this.markMessageProcessed(dedupKey);
+
+      this.events.onMessage?.(robotMsg, acknowledge);
+    } catch (error) {
+      this.log("error", "Failed to parse robot message", {
+        error: String(error),
+        data: msg.data,
+      });
+      // Still acknowledge to prevent redelivery
+      acknowledge();
+    }
+  }
+
+  /**
+   * Check if a message has already been processed.
+   */
+  private isMessageProcessed(msgId: string): boolean {
+    return this.processedMessages.has(msgId);
+  }
+
+  /**
+   * Mark a message as processed and clean up old entries.
+   */
+  private markMessageProcessed(msgId: string): void {
+    const now = Date.now();
+    this.processedMessages.set(msgId, now);
+
+    // Cleanup old entries if cache is too large
+    if (this.processedMessages.size > this.dedupMaxSize) {
+      const cutoff = now - this.dedupMaxAge;
+      for (const [key, timestamp] of this.processedMessages) {
+        if (timestamp < cutoff) {
+          this.processedMessages.delete(key);
+        }
+      }
+    }
+  }
+
+  private handleDisconnect(code: number, reason: string): void {
+    this.clearTimers();
+    this.socket = null;
+
+    if (this.stopped) {
+      return;
+    }
+
+    this.setState("disconnected", `Socket closed: ${code} ${reason}`);
+
+    if (this.shouldReconnect()) {
+      this.scheduleReconnect();
+    }
+  }
+
+  private startHeartbeat(): void {
+    this.clearHeartbeat();
+
+    this.heartbeatTimer = setInterval(() => {
+      if (this.socket?.readyState === WebSocket.OPEN) {
+        this.socket.send(
+          JSON.stringify({
+            specVersion: "1.0",
+            type: "SYSTEM",
+            headers: { type: "ping" },
+            data: "",
+          }),
+        );
+      }
+    }, this.heartbeatInterval);
+  }
+
+  private clearHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = undefined;
+    }
+  }
+
+  private clearTimers(): void {
+    this.clearHeartbeat();
+    this.clearReconnectTimer();
+  }
+
+  private clearReconnectTimer(): void {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = undefined;
+    }
   }
 
   private shouldReconnect(): boolean {
@@ -236,7 +504,7 @@ export class DingTalkStreamClient {
     const initialDelay = this.config.initialReconnectDelay ?? 1000;
     const maxDelay = this.config.maxReconnectDelay ?? 30000;
 
-    // Exponential backoff with jitter.
+    // Exponential backoff with jitter
     const baseDelay = Math.min(
       initialDelay * 2 ** this.reconnectAttempts,
       maxDelay,
@@ -244,7 +512,7 @@ export class DingTalkStreamClient {
     const jitter = baseDelay * 0.2 * (Math.random() - 0.5);
     const delay = Math.round(baseDelay + jitter);
 
-    this.logger?.info?.("Scheduling reconnect", {
+    this.log("info", "Scheduling reconnect", {
       attempt: this.reconnectAttempts + 1,
       delayMs: delay,
     });
@@ -254,7 +522,7 @@ export class DingTalkStreamClient {
       try {
         await this.connect();
       } catch (error) {
-        this.logger?.error?.("Reconnect failed", {
+        this.log("error", "Reconnect failed", {
           attempt: this.reconnectAttempts,
           error: String(error),
         });
@@ -262,34 +530,19 @@ export class DingTalkStreamClient {
     }, delay);
   }
 
-  private clearReconnectTimer(): void {
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = undefined;
-    }
+  private setState(state: StreamState, error?: string): void {
+    this.state = state;
+    this.events.onStateChange?.(state, error);
   }
 
-  private setupDisconnectHandler(): void {
-    if (!this.client) return;
-
-    // Access internal socket if available.
-    const socket = (this.client as any).socket;
-    if (!socket) return;
-
-    socket.on?.("close", (code: number, reason: string) => {
-      if (this.stopped) return;
-
-      this.logger?.warn?.("Stream socket closed", { code, reason });
-      this.setState("disconnected", `Socket closed: ${code}`);
-
-      if (this.shouldReconnect()) {
-        this.scheduleReconnect();
-      }
-    });
-
-    socket.on?.("error", (error: Error) => {
-      this.logger?.error?.("Stream socket error", { error: error.message });
-    });
+  private log(
+    level: "debug" | "info" | "warn" | "error",
+    message: string,
+    data?: Record<string, unknown>,
+  ): void {
+    if (this.config.debug || level !== "debug") {
+      this.logger?.[level]?.(message, data);
+    }
   }
 }
 
@@ -304,7 +557,7 @@ export class DingTalkStreamClient {
  * });
  *
  * stream.onMessage(async (message, ack) => {
- *   // Process message...
+ *   console.log("Received:", message.text?.content);
  *   ack();
  * });
  *
