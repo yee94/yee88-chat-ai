@@ -1,11 +1,28 @@
 // src/runner/opencode.ts - OpenCode CLI Runner
 import { consola } from "consola";
+import { readFileSync, existsSync } from "node:fs";
+import { join } from "node:path";
+import { homedir } from "node:os";
 import type { Yee88Event, ResumeToken, Action, ActionKind } from "../model.ts";
 import { createStartedEvent, createActionEvent, createCompletedEvent } from "../model.ts";
 import { decodeEvent, type OpenCodeEvent } from "../schema/opencode.ts";
 import type { Runner, RunOptions } from "./types.ts";
 
 const ENGINE = "opencode";
+
+/** 读取 OpenCode 配置文件中的 model */
+function readOpenCodeModel(): string | undefined {
+  const configPath = join(homedir(), ".config", "opencode", "opencode.json");
+  if (!existsSync(configPath)) return undefined;
+  try {
+    const content = readFileSync(configPath, "utf-8");
+    const config = JSON.parse(content) as Record<string, unknown>;
+    const model = config.model;
+    return typeof model === "string" ? model : undefined;
+  } catch {
+    return undefined;
+  }
+}
 const RESUME_RE = /(?:^|\n)\s*`?opencode(?:\s+run)?\s+(?:--session|-s)\s+(?<token>ses_[A-Za-z0-9]+)`?\s*$/im;
 
 /** OpenCode 流状态，跟踪 JSONL 流解析过程中的状态 */
@@ -101,7 +118,8 @@ function extractToolAction(part: Record<string, unknown>): Action | null {
 export function translateEvent(
   event: OpenCodeEvent,
   title: string,
-  state: StreamState
+  state: StreamState,
+  model?: string
 ): Yee88Event[] {
   const sessionId = event.sessionID;
   if (typeof sessionId === "string" && sessionId && !state.sessionId) {
@@ -117,6 +135,7 @@ export function translateEvent(
             engine: ENGINE,
             resume: { engine: ENGINE, value: state.sessionId },
             title,
+            model,
           }),
         ];
       }
@@ -269,7 +288,8 @@ export class OpenCodeRunner implements Runner {
   private readonly sessionTitle: string;
 
   constructor(options?: { model?: string; cmd?: string; sessionTitle?: string }) {
-    this.model = options?.model;
+    // 优先使用传入的 model，否则从 OpenCode 配置读取
+    this.model = options?.model ?? readOpenCodeModel();
     this.cmd = options?.cmd ?? "opencode";
     this.sessionTitle = options?.sessionTitle ?? "opencode";
   }
@@ -379,7 +399,7 @@ export class OpenCodeRunner implements Runner {
 
           try {
             const event = decodeEvent(trimmed);
-            const events = translateEvent(event, this.sessionTitle, state);
+            const events = translateEvent(event, this.sessionTitle, state, this.model);
             for (const evt of events) {
               yield evt;
               if (evt.type === "completed") {
@@ -396,7 +416,7 @@ export class OpenCodeRunner implements Runner {
       if (buffer.trim()) {
         try {
           const event = decodeEvent(buffer.trim());
-          const events = translateEvent(event, this.sessionTitle, state);
+          const events = translateEvent(event, this.sessionTitle, state, this.model);
           for (const evt of events) {
             yield evt;
             if (evt.type === "completed") didEmitCompleted = true;

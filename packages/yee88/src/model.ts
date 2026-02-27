@@ -33,6 +33,7 @@ export interface StartedEvent {
   engine: EngineId;
   resume: ResumeToken;
   title?: string;
+  model?: string;
   meta?: Record<string, unknown>;
 }
 

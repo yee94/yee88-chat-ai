@@ -19,7 +19,7 @@ export class ConfigError extends Error {
 // --- Zod Schemas ---
 
 export const ProjectConfigSchema = z.object({
-  alias: z.string(),
+  alias: z.string().optional(),
   path: z.string(),
   worktrees_dir: z.string().default(".worktrees"),
   default_engine: z.string().optional(),

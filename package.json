@@ -1,28 +1,21 @@
 {
-  "name": "yee88",
-  "version": "0.1.0",
-  "module": "src/index.ts",
-  "type": "module",
+  "name": "yee88-monorepo",
+  "version": "1.0.0",
   "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "packageManager": "pnpm@9.15.4",
   "scripts": {
-    "dev": "bun --hot src/index.ts",
-    "start": "bun src/index.ts",
-    "test": "bun test",
-    "typecheck": "tsc --noEmit",
-    "cli": "bun src/cli/index.ts"
+    "preinstall": "npx only-allow pnpm",
+    "dev": "turbo --filter='./packages/*' dev",
+    "build": "turbo --filter='./packages/*' build",
+    "test": "turbo --filter='./packages/*' test",
+    "typecheck": "turbo --filter='./packages/*' typecheck"
   },
   "devDependencies": {
-    "@types/bun": "latest",
-    "@types/node": "^25.3.2"
-  },
-  "peerDependencies": {
+    "@types/node": "^20.4.5",
+    "turbo": "^2.6.3",
     "typescript": "^5"
-  },
-  "dependencies": {
-    "@chat-adapter/telegram": "^4.15.0",
-    "@iarna/toml": "^2.2.5",
-    "chat": "^4.15.0",
-    "consola": "^3.4.2",
-    "zod": "^4.3.6"
   }
 }

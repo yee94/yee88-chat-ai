@@ -135,6 +135,7 @@ export function createBot(config: AppConfig) {
     let finalAnswer = "";
     let finalResume: ResumeToken | undefined;
     let actionLines: string[] = [];
+    let currentModel: string | undefined;
 
     try {
       for await (const event of runner.run(text, resume, { cwd })) {
@@ -143,6 +144,7 @@ export function createBot(config: AppConfig) {
         switch (event.type) {
           case "started": {
             finalResume = event.resume;
+            currentModel = event.model;
             // 保存 session（topic 隔离）
             saveResume(chatId, ownerId, topicThreadId, event.resume);
 
@@ -195,11 +197,20 @@ export function createBot(config: AppConfig) {
             const statusIcon = event.ok ? "✓" : "✗";
             const header = formatHeader(elapsed2, null, { label: statusIcon, engine: "opencode" });
 
+            // 构建 footer：actions + model
+            const footerParts: string[] = [];
+            if (actionLines.length > 0) {
+              footerParts.push(actionLines.join("\n"));
+            }
+            if (currentModel) {
+              footerParts.push(`\`model: ${currentModel}\``);
+            }
+
             // 构建最终消息
             const parts = {
               header,
               body: finalAnswer || undefined,
-              footer: actionLines.length > 0 ? actionLines.join("\n") : undefined,
+              footer: footerParts.length > 0 ? footerParts.join("\n\n") : undefined,
             };
 
             const messages = prepareMultiMessage(parts);
@@ -240,14 +251,36 @@ export function createBot(config: AppConfig) {
   }
 
   // 注册事件处理器
-  chat.onNewMention(async (thread, message) => {
+  // 处理私聊消息（群组消息通过 onNewMention 处理）
+  chat.onNewMessage(/.*/, async (thread, message) => {
+    // 忽略 bot 自己的消息
+    if (message.author.isMe) return;
+    // 只处理私聊，群组消息由 onNewMention 处理
+    // thread.channelId 格式: "telegram:{chatId}" 或 "telegram:{chatId}:{threadId}"
+    // 私聊 chatId 是正数，群组是负数
+    const chatIdStr = thread.channelId.split(":")[1] ?? "";
+    const chatId = Number(chatIdStr);
+    if (chatId < 0) {
+      // 群组消息，跳过（等待 onNewMention）
+      return;
+    }
+    consola.info(`[bot] onNewMessage (private): ${message.text.slice(0, 50)}`);
     await thread.subscribe();
     await handleMessage(thread, message);
   });
 
+  // 处理群组 @ 提及
+  chat.onNewMention(async (thread, message) => {
+    consola.info(`[bot] onNewMention: ${message.text.slice(0, 50)}`);
+    await thread.subscribe();
+    await handleMessage(thread, message);
+  });
+
+  // 处理已订阅 thread 的后续消息
   chat.onSubscribedMessage(async (thread, message) => {
     // 忽略 bot 自己的消息
     if (message.author.isMe) return;
+    consola.info(`[bot] onSubscribedMessage: ${message.text.slice(0, 50)}`);
     await handleMessage(thread, message);
   });
 
