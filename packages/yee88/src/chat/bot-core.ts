@@ -86,9 +86,9 @@ export function saveResume(
 /** 流式进度消息的最大文本预览长度 */
 const MAX_STREAMING_TEXT = 2000;
 /** 流式更新间隔（毫秒） */
-const STREAM_UPDATE_INTERVAL = 600;
+const STREAM_UPDATE_INTERVAL = 1200;
 /** 文本变化时的最小更新间隔（毫秒） */
-const TEXT_UPDATE_INTERVAL = 400;
+const TEXT_UPDATE_INTERVAL = 800;
 
 /** 构建流式进度消息内容 */
 function buildProgressMarkdown(
