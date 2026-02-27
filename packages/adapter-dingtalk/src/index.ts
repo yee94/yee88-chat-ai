@@ -103,6 +103,29 @@ export class DingTalkAdapter
   >();
   /** Session webhook cache: threadId -> webhook URL (short-lived). */
   private readonly sessionWebhookCache = new Map<string, string>();
+  /** 
+   * Message ID mapping: synthetic ID -> processQueryKey.
+   * Used for recall (delete) operations on proactive messages.
+   */
+  private readonly processQueryKeyCache = new Map<string, string>();
+  /**
+   * Staff ID cache: threadId -> staffId.
+   * Used for DM proactive messages (requires staffId, not senderId).
+   */
+  private readonly staffIdCache = new Map<string, string>();
+  /**
+   * AI Card instance cache: threadId -> cardInstanceId.
+   * Used for streaming updates to existing cards.
+   */
+  private readonly aiCardCache = new Map<string, {
+    cardInstanceId: string;
+    createdAt: number;
+  }>();
+  /**
+   * Edit operation locks: messageId -> Promise.
+   * Prevents concurrent edit/delete operations on the same message.
+   */
+  private readonly editLocks = new Map<string, Promise<unknown>>();
 
   private chat: ChatInstance | null = null;
   private _botUserId?: string;
@@ -188,11 +211,17 @@ export class DingTalkAdapter
 
     const conversationType =
       msg.conversationType === "2" ? "2" : ("1" as const);
+    
+    // For DM, use conversationId (not senderId)
     const threadId = this.encodeThreadId({
-      conversationId:
-        conversationType === "2" ? msg.conversationId : msg.senderId,
+      conversationId: msg.conversationId,
       conversationType,
     });
+
+    // Cache staffId for DM proactive messages
+    if (conversationType === "1" && msg.senderStaffId) {
+      this.staffIdCache.set(threadId, msg.senderStaffId);
+    }
 
     // Cache the session webhook for replies.
     if (msg.sessionWebhook) {
@@ -268,7 +297,27 @@ export class DingTalkAdapter
       throw new ValidationError("dingtalk", "Message text cannot be empty");
     }
 
-    // Try session webhook first (faster, no auth needed).
+    // Auto-degradation strategy:
+    // 1. Try proactive API first (supports recall for edit)
+    // 2. Fall back to session webhook (no recall support)
+
+    // For DM, check if staffId is available for proactive API
+    const isGroup = parsedThread.conversationType === "2";
+    const staffId = isGroup ? undefined : this.staffIdCache.get(threadId);
+    const canUseProactiveApi = isGroup || !!staffId;
+
+    if (canUseProactiveApi) {
+      try {
+        return await this.sendViaProactiveApi(text, parsedThread, threadId);
+      } catch (error) {
+        // If proactive API fails (e.g., IP whitelist), fall back to session webhook
+        this.logger.debug("Proactive API failed, falling back to session webhook", {
+          error: String(error),
+        });
+      }
+    }
+
+    // Fall back to session webhook
     const sessionWebhook = this.sessionWebhookCache.get(threadId);
     if (sessionWebhook) {
       return this.sendViaSessionWebhook(
@@ -280,8 +329,11 @@ export class DingTalkAdapter
       );
     }
 
-    // Fall back to proactive message API.
-    return this.sendViaProactiveApi(text, parsedThread, threadId);
+    // No available method
+    throw new NetworkError(
+      "dingtalk",
+      "Cannot send message: no session webhook and proactive API unavailable",
+    );
   }
 
   private async sendViaSessionWebhook(
@@ -383,7 +435,15 @@ export class DingTalkAdapter
     if (isGroup) {
       payload.openConversationId = thread.conversationId;
     } else {
-      payload.userIds = [thread.conversationId];
+      // For DM, use staffId (caller should ensure it's available)
+      const staffId = this.staffIdCache.get(threadId);
+      if (!staffId) {
+        throw new NetworkError(
+          "dingtalk",
+          "staffId not available for proactive DM",
+        );
+      }
+      payload.userIds = [staffId];
     }
 
     let response: Response;
@@ -413,9 +473,14 @@ export class DingTalkAdapter
     }
 
     const result = (await response.json()) as Record<string, unknown>;
-    const messageId =
-      (result.processQueryKey as string) ??
-      `dingtalk:${thread.conversationId}:${Date.now()}`;
+    const processQueryKey = result.processQueryKey as string | undefined;
+    const syntheticId = `dingtalk:${thread.conversationId}:${Date.now()}`;
+    const messageId = processQueryKey ?? syntheticId;
+
+    // Cache processQueryKey for recall (delete) operations
+    if (processQueryKey) {
+      this.processQueryKeyCache.set(messageId, processQueryKey);
+    }
 
     const syntheticRaw: DingTalkInboundMessage = {
       msgId: messageId,
@@ -455,23 +520,119 @@ export class DingTalkAdapter
     messageId: string,
     message: AdapterPostableMessage,
   ): Promise<RawMessage<DingTalkRawMessage>> {
-    // DingTalk doesn't support editing messages natively.
-    // We post a new message as a workaround (post+edit streaming pattern).
+    // Strategy priority:
+    // 1. AI Card streaming (if cardTemplateId configured) - best UX
+    // 2. Recall + resend (if processQueryKey available) - acceptable UX
+    // 3. Post new message (fallback) - poor UX (two messages)
+
+    // TODO: Implement AI Card streaming when cardTemplateId is configured
+    // if (this.config.cardTemplateId) {
+    //   return this.updateAICard(threadId, messageId, message);
+    // }
+
+    // Try recall + resend if we have processQueryKey
+    const processQueryKey = this.processQueryKeyCache.get(messageId);
+    if (processQueryKey) {
+      // Use lock to prevent concurrent edit/delete on the same message
+      const existingLock = this.editLocks.get(messageId);
+      if (existingLock) {
+        // Wait for existing operation to complete, then skip (already edited)
+        await existingLock.catch(() => {});
+        this.logger.debug("Skipping duplicate edit operation", { threadId, messageId });
+        // Return a synthetic result since the message was already edited
+        return this.postMessage(threadId, message);
+      }
+
+      const editOperation = (async () => {
+        this.logger.debug("Editing via recall + resend", { threadId, messageId });
+        
+        // Recall the old message
+        await this.deleteMessage(threadId, messageId);
+        
+        // Send the new message
+        return this.postMessage(threadId, message);
+      })();
+
+      this.editLocks.set(messageId, editOperation);
+      try {
+        return await editOperation;
+      } finally {
+        this.editLocks.delete(messageId);
+      }
+    }
+
+    // Fallback: just post a new message (session webhook messages can't be recalled)
     this.logger.warn(
-      "DingTalk does not support message editing; posting new message instead",
+      "DingTalk edit fallback: posting new message (original cannot be recalled)",
       { threadId, messageId },
     );
     return this.postMessage(threadId, message);
   }
 
-  // ─── Message Deletion ──────────────────────────────────────────────
+  // ─── Message Deletion (Recall) ───────────────────────────────────────
 
   async deleteMessage(threadId: string, messageId: string): Promise<void> {
-    // DingTalk robot API does not support message deletion.
-    this.logger.warn("DingTalk does not support message deletion", {
-      threadId,
-      messageId,
-    });
+    const processQueryKey = this.processQueryKeyCache.get(messageId);
+    
+    if (!processQueryKey) {
+      this.logger.warn(
+        "Cannot recall message: no processQueryKey (only proactive messages can be recalled)",
+        { threadId, messageId },
+      );
+      return;
+    }
+
+    const parsedThread = this.resolveThreadId(threadId);
+    const token = await getAccessToken(this.config, this.logger);
+    const robotCode = this.config.robotCode ?? this.config.clientId;
+    const isGroup = parsedThread.conversationType === "2";
+
+    const url = isGroup
+      ? `${this.apiBaseUrl}/v1.0/robot/groupMessages/recall`
+      : `${this.apiBaseUrl}/v1.0/robot/otoMessages/batchRecall`;
+
+    const payload: Record<string, unknown> = {
+      robotCode,
+      processQueryKeys: [processQueryKey],
+    };
+
+    if (isGroup) {
+      payload.openConversationId = parsedThread.conversationId;
+    }
+
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-acs-dingtalk-access-token": token,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => "");
+        this.logger.warn("Failed to recall message", {
+          threadId,
+          messageId,
+          status: response.status,
+          error: errorText,
+        });
+        return;
+      }
+
+      // Clean up cache
+      this.processQueryKeyCache.delete(messageId);
+      this.deleteCachedMessage(messageId);
+      
+      this.logger.debug("Message recalled successfully", { threadId, messageId });
+    } catch (error) {
+      this.logger.warn("Failed to recall message", {
+        threadId,
+        messageId,
+        error: String(error),
+      });
+    }
   }
 
   // ─── Reactions ─────────────────────────────────────────────────────

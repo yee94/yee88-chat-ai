@@ -20,16 +20,30 @@ export interface DingTalkAdapterConfig {
   agentId?: string;
   /** Optional custom API base URL (defaults to https://api.dingtalk.com). */
   apiBaseUrl?: string;
+
+  // ─── AI Card Streaming (Optional) ────────────────────────────────
+  /**
+   * AI Card template ID for streaming responses.
+   * If configured, enables true streaming with typewriter effect.
+   * Create template at: https://open.dingtalk.com/
+   */
+  cardTemplateId?: string;
+  /**
+   * AI Card template variable key for content (default: "content").
+   */
+  cardTemplateKey?: string;
 }
 
 /**
  * DingTalk thread ID components.
  */
 export interface DingTalkThreadId {
-  /** Conversation ID (openConversationId for groups, userId for DMs). */
+  /** Conversation ID (openConversationId for groups, conversationId for DMs). */
   conversationId: string;
   /** Conversation type: "1" = DM, "2" = group chat. */
   conversationType: "1" | "2";
+  /** Staff ID for DM proactive messages (only available for enterprise internal users). */
+  staffId?: string;
 }
 
 /**
