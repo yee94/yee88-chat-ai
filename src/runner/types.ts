@@ -5,6 +5,8 @@ import type { Yee88Event, ResumeToken } from "../model.ts";
 export interface RunOptions {
   model?: string;
   system?: string;
+  /** 工作目录，用于 topic 绑定项目时切换 CWD */
+  cwd?: string;
 }
 
 /** Runner 接口 */

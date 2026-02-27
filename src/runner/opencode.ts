@@ -324,10 +324,16 @@ export class OpenCodeRunner implements Runner {
 
     consola.info(`[opencode] spawning: ${this.cmd} ${args.slice(0, 3).join(" ")} ...`);
 
+    const cwd = runOptions?.cwd;
+    if (cwd) {
+      consola.info(`[opencode] cwd: ${cwd}`);
+    }
+
     const proc = Bun.spawn([this.cmd, ...args], {
       stdout: "pipe",
       stderr: "pipe",
       stdin: "ignore",
+      ...(cwd ? { cwd } : {}),
     });
 
     // Drain stderr in background

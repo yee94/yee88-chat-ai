@@ -7,8 +7,10 @@ import { OpenCodeRunner } from "../runner/opencode.ts";
 import { SessionStore } from "../session/store.ts";
 import { ThreadScheduler, type ThreadJob } from "../scheduler/index.ts";
 import { formatElapsed, formatHeader, assembleMarkdownParts, prepareMultiMessage } from "../markdown/index.ts";
+import { TopicStateStore, type RunContext } from "../topic/state.ts";
+import { mergeTopicContext, formatContext } from "../topic/context.ts";
 import type { Yee88Event, ResumeToken } from "../model.ts";
-import type { AppConfig } from "../config/index.ts";
+import { type AppConfig, projectForChat, resolveProject } from "../config/index.ts";
 
 /** Bot 线程状态 */
 interface BotThreadState {
@@ -28,6 +30,9 @@ export function createBot(config: AppConfig) {
   const sessionStore = new SessionStore(
     `${process.env["HOME"]}/.yee88/sessions.json`
   );
+  const topicStore = new TopicStateStore(
+    `${process.env["HOME"]}/.yee88/topics.json`
+  );
 
   const chat = new Chat<{ telegram: ReturnType<typeof createTelegramAdapter> }, BotThreadState>({
     userName: "yee88",
@@ -38,6 +43,43 @@ export function createBot(config: AppConfig) {
     logger: "info",
   });
 
+  /** 从 thread.id 解析出 topic 的 messageThreadId（如果有） */
+  function parseTopicId(thread: Thread<BotThreadState>): string | null {
+    // chat SDK telegram adapter 编码格式："telegram:{chatId}" 或 "telegram:{chatId}:{messageThreadId}"
+    const parts = thread.id.split(":");
+    return parts.length >= 3 ? parts[2]! : null;
+  }
+
+  /** 获取 session resume token，topic 优先，fallback 到 chat 级别 */
+  function getResume(
+    chatId: string,
+    ownerId: string,
+    topicThreadId: string | null
+  ): ResumeToken | null {
+    // Topic 级别 session 隔离
+    if (topicThreadId) {
+      const topicResume = topicStore.getSessionResume(chatId, topicThreadId, "opencode");
+      if (topicResume) {
+        return { engine: "opencode", value: topicResume };
+      }
+    }
+    // Fallback 到 chat 级别
+    return sessionStore.getSessionResume(chatId, ownerId, "opencode");
+  }
+
+  /** 保存 session resume token，同时写入 topic 和 chat 级别 */
+  function saveResume(
+    chatId: string,
+    ownerId: string,
+    topicThreadId: string | null,
+    token: ResumeToken
+  ): void {
+    if (topicThreadId) {
+      topicStore.setSessionResume(chatId, topicThreadId, token.engine, token.value);
+    }
+    sessionStore.setSessionResume(chatId, ownerId, token);
+  }
+
   // 消息处理核心逻辑
   async function handleMessage(thread: Thread<BotThreadState>, message: Message): Promise<void> {
     const text = message.text.trim();
@@ -45,14 +87,37 @@ export function createBot(config: AppConfig) {
 
     const chatId = thread.channelId;
     const ownerId = message.author.userId;
+    const topicThreadId = parseTopicId(thread);
 
-    // 获取或创建 resume token
-    let resume = sessionStore.getSessionResume(chatId, ownerId, "opencode");
+    // 解析 topic context → 合并 chat 默认项目
+    const boundContext = topicThreadId
+      ? topicStore.getContext(chatId, topicThreadId)
+      : null;
+    const chatProject = projectForChat(config, Number(chatId.replace(/\D/g, "")) || 0)
+      ?? config.default_project
+      ?? null;
+    const effectiveContext = mergeTopicContext(boundContext, chatProject);
+
+    if (effectiveContext) {
+      consola.info(`[bot] context: ${formatContext(effectiveContext)}`);
+    }
+
+    // 获取 resume token（topic 隔离）
+    let resume = getResume(chatId, ownerId, topicThreadId);
 
     consola.info(`[bot] message from ${message.author.userName}: ${text.slice(0, 100)}`);
 
     // 显示 typing 状态
     await thread.startTyping("Thinking...");
+
+    // 解析项目 CWD
+    let cwd: string | undefined;
+    if (effectiveContext?.project) {
+      const project = resolveProject(config, effectiveContext.project);
+      if (project) {
+        cwd = project.path;
+      }
+    }
 
     // 运行 OpenCode
     let progressMsg: SentMessage | null = null;
@@ -64,14 +129,14 @@ export function createBot(config: AppConfig) {
     let actionLines: string[] = [];
 
     try {
-      for await (const event of runner.run(text, resume)) {
+      for await (const event of runner.run(text, resume, { cwd })) {
         const elapsed = (Date.now() - startTime) / 1000;
 
         switch (event.type) {
           case "started": {
             finalResume = event.resume;
-            // 保存 session
-            sessionStore.setSessionResume(chatId, ownerId, event.resume);
+            // 保存 session（topic 隔离）
+            saveResume(chatId, ownerId, topicThreadId, event.resume);
 
             const header = formatHeader(elapsed, null, { label: "▸", engine: "opencode" });
             progressMsg = await thread.post({ markdown: header });
@@ -115,7 +180,7 @@ export function createBot(config: AppConfig) {
             finalAnswer = event.answer;
             if (event.resume) {
               finalResume = event.resume;
-              sessionStore.setSessionResume(chatId, ownerId, event.resume);
+              saveResume(chatId, ownerId, topicThreadId, event.resume);
             }
 
             const elapsed2 = (Date.now() - startTime) / 1000;
@@ -183,5 +248,5 @@ export function createBot(config: AppConfig) {
     await event.thread.post("⚠️ Cancel requested (not yet implemented)");
   });
 
-  return { chat, runner, sessionStore, stateAdapter };
+  return { chat, runner, sessionStore, stateAdapter, topicStore };
 }
