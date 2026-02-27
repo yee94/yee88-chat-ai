@@ -1,6 +1,6 @@
-# AGENTS.md — yee88-rust
+# AGENTS.md — yee88
 
-Telegram Bot 桥接 OpenCode CLI 的 AI 编程助手。Bun + TypeScript 项目。
+Telegram / DingTalk Bot 桥接 OpenCode CLI 的 AI 编程助手。Bun + TypeScript monorepo 项目。
 
 ## Build & Run
 
@@ -27,32 +27,46 @@ bun test src/__tests__/guard.test.ts  # 运行单个测试文件
 ## Project Structure
 
 ```
-src/
-├── index.ts              # 主入口，调用 startServer()
-├── model.ts              # 核心领域模型（Event, Action, ResumeToken）
-├── chat/
-│   ├── server.ts         # Bun.serve Webhook 服务器
-│   ├── bot.ts            # Bot 消息处理核心逻辑
-│   ├── guard.ts          # 权限验证（allowed_users）
-│   ├── startup.ts        # 启动消息生成
-│   └── state.ts          # 内存版 StateAdapter
-├── config/index.ts       # TOML 配置管理（Zod schema）
-├── runner/
-│   ├── types.ts          # Runner 接口定义
-│   └── opencode.ts       # OpenCode CLI Runner（JSONL 流解析）
-├── schema/opencode.ts    # OpenCode 事件 Zod schema
-├── session/
-│   ├── store.ts          # Session resume token 持久化
-│   └── lock.ts           # 异步互斥锁
-├── topic/
-│   ├── state.ts          # Topic 级别状态管理
-│   └── context.ts        # Topic 上下文合并
-├── scheduler/index.ts    # 线程任务调度器（同线程串行，跨线程并行）
-├── markdown/index.ts     # Markdown 渲染、消息分割
-├── cli/
-│   ├── index.ts          # CLI 子命令路由
-│   └── onboard.ts        # 交互式 onboarding
-└── __tests__/            # 所有测试文件
+packages/
+├── yee88/                    # 主应用 - Bot 服务
+│   └── src/
+│       ├── index.ts          # 主入口，调用 startServer()
+│       ├── model.ts          # 核心领域模型（Event, Action, ResumeToken）
+│       ├── chat/
+│       │   ├── server.ts     # Bun.serve 多平台服务器
+│       │   ├── bot.ts        # Telegram Bot
+│       │   ├── bot-dingtalk.ts  # DingTalk Bot
+│       │   ├── bot-core.ts   # 共享核心逻辑（adapter 无关）
+│       │   ├── guard.ts      # 权限验证（Telegram + DingTalk）
+│       │   ├── polling.ts    # Telegram Polling 客户端
+│       │   ├── startup.ts    # 启动消息生成
+│       │   └── state.ts      # 内存版 StateAdapter
+│       ├── config/index.ts   # TOML 配置管理（Zod schema）
+│       ├── runner/
+│       │   ├── types.ts      # Runner 接口定义
+│       │   └── opencode.ts   # OpenCode CLI Runner（JSONL 流解析）
+│       ├── schema/opencode.ts # OpenCode 事件 Zod schema
+│       ├── session/
+│       │   ├── store.ts      # Session resume token 持久化
+│       │   └── lock.ts       # 异步互斥锁
+│       ├── topic/
+│       │   ├── state.ts      # Topic 级别状态管理
+│       │   └── context.ts    # Topic 上下文合并
+│       ├── scheduler/index.ts # 线程任务调度器
+│       ├── markdown/index.ts  # Markdown 渲染、消息分割
+│       ├── cli/
+│       │   ├── index.ts      # CLI 子命令路由
+│       │   └── onboard.ts    # 交互式 onboarding
+│       └── __tests__/        # 所有测试文件
+│
+└── adapter-dingtalk/         # DingTalk 适配器
+    └── src/
+        ├── index.ts          # 适配器主入口
+        ├── stream.ts         # Stream 模式客户端
+        ├── auth.ts           # 鉴权
+        ├── cards.ts          # ActionCard 支持
+        ├── markdown.ts       # Markdown 转换
+        └── types.ts          # 类型定义
 ```
 
 ## Runtime & Tooling

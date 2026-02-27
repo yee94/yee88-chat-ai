@@ -88,6 +88,7 @@ describe("Project helpers", () => {
     default_project: "main",
     system_prompt: "global prompt",
     telegram: { allowed_users: [] },
+    dingtalk: { reply_mode: "ai_card" as const, allowed_users: [] },
     projects: {
       main: {
         alias: "main",

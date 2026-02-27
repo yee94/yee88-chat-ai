@@ -19,6 +19,19 @@ export function isAuthorized(message: Message, config: AppConfig): boolean {
   return allowedUsers.includes(numericId);
 }
 
+/**
+ * 检查 DingTalk 用户是否有权限使用 bot。
+ * - allowed_users 为空 → 允许所有人
+ * - allowed_users 非空 → 仅允许列表中的用户（userId 字符串匹配）
+ */
+export function isAuthorizedDingTalk(message: Message, config: AppConfig): boolean {
+  const allowedUsers = config.dingtalk?.allowed_users ?? [];
+  if (allowedUsers.length === 0) return true;
+
+  const userId = message.author.userId;
+  return allowedUsers.includes(userId);
+}
+
 /** 生成未授权提示消息 */
 export function unauthorizedMessage(): string {
   return "⚠️ 您没有使用此 bot 的权限。请联系管理员将您的 user ID 添加到 `allowed_users` 配置中。";

@@ -47,6 +47,13 @@ export interface ActionEvent {
   level?: ActionLevel;
 }
 
+export interface TextEvent {
+  type: "text";
+  engine: EngineId;
+  delta: string;
+  accumulated: string;
+}
+
 export interface CompletedEvent {
   type: "completed";
   engine: EngineId;
@@ -57,7 +64,7 @@ export interface CompletedEvent {
   usage?: Record<string, unknown>;
 }
 
-export type Yee88Event = StartedEvent | ActionEvent | CompletedEvent;
+export type Yee88Event = StartedEvent | ActionEvent | TextEvent | CompletedEvent;
 
 // Helper constructors
 export function createStartedEvent(params: Omit<StartedEvent, "type">): StartedEvent {
@@ -66,6 +73,10 @@ export function createStartedEvent(params: Omit<StartedEvent, "type">): StartedE
 
 export function createActionEvent(params: Omit<ActionEvent, "type">): ActionEvent {
   return { type: "action", ...params };
+}
+
+export function createTextEvent(params: Omit<TextEvent, "type">): TextEvent {
+  return { type: "text", ...params };
 }
 
 export function createCompletedEvent(params: Omit<CompletedEvent, "type">): CompletedEvent {

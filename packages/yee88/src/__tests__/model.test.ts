@@ -3,6 +3,7 @@ import { test, expect, describe } from "bun:test";
 import {
   createStartedEvent,
   createActionEvent,
+  createTextEvent,
   createCompletedEvent,
   type ResumeToken,
   type Action,
@@ -44,6 +45,18 @@ describe("model", () => {
     expect(evt.type).toBe("completed");
     expect(evt.ok).toBe(true);
     expect(evt.resume).toEqual(resume);
+  });
+
+  test("createTextEvent sets type", () => {
+    const evt = createTextEvent({
+      engine: "opencode",
+      delta: "hello",
+      accumulated: "hello",
+    });
+    expect(evt.type).toBe("text");
+    expect(evt.engine).toBe("opencode");
+    expect(evt.delta).toBe("hello");
+    expect(evt.accumulated).toBe("hello");
   });
 
   test("createCompletedEvent with error", () => {

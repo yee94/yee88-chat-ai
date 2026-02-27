@@ -138,10 +138,22 @@ describe("translateEvent", () => {
     }
   });
 
-  test("text events accumulate in state", () => {
+  test("text events accumulate in state and emit TextEvent", () => {
     const state = makeState();
-    translateEvent({ type: "text", part: { text: "Hello " } }, "test", state);
-    translateEvent({ type: "text", part: { text: "world" } }, "test", state);
+    const events1 = translateEvent({ type: "text", part: { text: "Hello " } }, "test", state);
+    expect(events1).toHaveLength(1);
+    expect(events1[0]!.type).toBe("text");
+    if (events1[0]!.type === "text") {
+      expect(events1[0]!.delta).toBe("Hello ");
+      expect(events1[0]!.accumulated).toBe("Hello ");
+    }
+
+    const events2 = translateEvent({ type: "text", part: { text: "world" } }, "test", state);
+    expect(events2).toHaveLength(1);
+    if (events2[0]!.type === "text") {
+      expect(events2[0]!.delta).toBe("world");
+      expect(events2[0]!.accumulated).toBe("Hello world");
+    }
     expect(state.lastText).toBe("Hello world");
   });
 

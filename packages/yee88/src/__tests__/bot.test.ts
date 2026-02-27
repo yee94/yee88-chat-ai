@@ -8,6 +8,7 @@ describe("createBot", () => {
     const config: AppConfig = {
       default_engine: "opencode",
       telegram: { allowed_users: [] },
+      dingtalk: { reply_mode: "ai_card" as const, allowed_users: [] },
       projects: {},
     };
     expect(() => createBot(config)).toThrow("Missing telegram.bot_token");
@@ -17,6 +18,7 @@ describe("createBot", () => {
     const config: AppConfig = {
       default_engine: "opencode",
       telegram: { bot_token: "123:test", allowed_users: [] },
+      dingtalk: { reply_mode: "ai_card" as const, allowed_users: [] },
       projects: {},
     };
     const { chat, runner, sessionStore, stateAdapter } = createBot(config);

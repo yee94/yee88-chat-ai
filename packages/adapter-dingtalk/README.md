@@ -91,6 +91,17 @@ console.log("DingTalk Stream 已连接");
 | `agentId`      | `string` | ❌       | 应用 AgentId                                          |
 | `apiBaseUrl`   | `string` | ❌       | 自定义 API 地址 (默认 `https://api.dingtalk.com`)      |
 
+### AI Card Streaming 配置 (可选)
+
+配置后启用 AI 卡片流式输出，实现打字机效果的流式响应体验。
+
+| Option            | Type     | Required | Default     | Description                                                    |
+| ----------------- | -------- | -------- | ----------- | -------------------------------------------------------------- |
+| `cardTemplateId`  | `string` | ❌       | -           | AI 卡片模板 ID，在[钉钉开放平台](https://open.dingtalk.com/)创建 |
+| `cardTemplateKey` | `string` | ❌       | `"content"` | 卡片模板中用于内容的变量 key                                     |
+
+配置 `cardTemplateId` 后，适配器会自动使用 AI Card 实现流式响应，提供打字机效果的最佳用户体验。
+
 ### Stream 模式额外配置
 
 | Option                  | Type      | Default | Description                    |
@@ -114,7 +125,7 @@ console.log("DingTalk Stream 已连接");
 | Reactions              | ✅    | 🔍    | ✅          | ✅      | ✅       | ❌           |
 | Cards / ActionCards    | ✅    | ✅    | ✅          | ✅      | Partial  | ✅           |
 | Modals                 | ✅    | ❌    | ❌          | ❌      | ❌       | ❌           |
-| AI Streaming           | ✅    | ⚠️    | ⚠️          | ⚠️      | ⚠️       | ⚠️ Post+Edit |
+| AI Streaming           | ✅    | ⚠️    | ⚠️          | ⚠️      | ⚠️       | ✅ AI Card   |
 | DMs                    | ✅    | ✅    | ✅          | ✅      | ✅       | ✅           |
 | Group Chat             | ✅    | ✅    | ✅          | ✅      | ✅       | ✅           |
 | File Uploads           | ✅    | ✅    | ✅          | ✅      | ✅       | 🔍 Receive   |
@@ -162,6 +173,47 @@ const groupThread = adapter.encodeThreadId({
 });
 await adapter.postMessage(groupThread, "群消息");
 ```
+
+### AI Card Streaming (AI 卡片流式输出)
+
+配置 `cardTemplateId` 后，适配器会使用钉钉 AI 卡片实现流式响应，带来打字机效果的实时输出体验。
+
+**消息发送/编辑策略优先级：**
+
+1. **AI Card Streaming** (需配置 `cardTemplateId`) — 最佳体验，实时流式更新
+2. **Proactive API + Recall** (需 `staffId` 和 IP 白名单) — 撤回旧消息并重发
+3. **Session Webhook** (兜底) — 发送新消息，无法撤回
+
+```typescript
+import { createDingTalkAdapter } from "@chat-adapter/dingtalk";
+
+const adapter = createDingTalkAdapter({
+  clientId: process.env.DINGTALK_CLIENT_ID!,
+  clientSecret: process.env.DINGTALK_CLIENT_SECRET!,
+  // 启用 AI Card Streaming
+  cardTemplateId: "your-card-template-id.schema",
+  cardTemplateKey: "content", // 默认值，可省略
+});
+
+// 流式响应示例
+const rawMsg = await adapter.postMessage(threadId, "正在思考...");
+// rawMsg.id 格式为 "aicard:{cardInstanceId}"
+
+// 更新内容（流式效果）
+await adapter.editMessage(threadId, rawMsg.id, "正在思考...\n\n第一段内容");
+await adapter.editMessage(threadId, rawMsg.id, "正在思考...\n\n第一段内容\n\n第二段内容");
+
+// 完成流式输出
+await adapter.finalizeMessage(threadId, rawMsg.id, "最终完整内容");
+```
+
+**创建 AI 卡片模板：**
+
+1. 登录 [钉钉开放平台](https://open.dingtalk.com/)
+2. 进入应用 → 卡片模板 → 创建模板
+3. 选择 "AI 卡片" 类型
+4. 添加一个 Markdown 类型的变量（默认 key 为 `content`）
+5. 保存并获取模板 ID（格式如 `xxxxx.schema`）
 
 ### ActionCard (交互卡片)
 

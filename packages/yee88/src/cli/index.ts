@@ -1,3 +1,4 @@
+#!/usr/bin/env bun
 // src/cli/index.ts - CLI 主入口
 import { consola } from "consola";
 import { loadAppConfig, writeConfig, loadOrInitConfig, HOME_CONFIG_PATH } from "../config/index.ts";

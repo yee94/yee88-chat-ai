@@ -4,7 +4,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import type { Yee88Event, ResumeToken, Action, ActionKind } from "../model.ts";
-import { createStartedEvent, createActionEvent, createCompletedEvent } from "../model.ts";
+import { createStartedEvent, createActionEvent, createTextEvent, createCompletedEvent } from "../model.ts";
 import { decodeEvent, type OpenCodeEvent } from "../schema/opencode.ts";
 import type { Runner, RunOptions } from "./types.ts";
 
@@ -213,6 +213,13 @@ export function translateEvent(
       const text = part["text"];
       if (typeof text === "string" && text) {
         state.lastText = (state.lastText ?? "") + text;
+        return [
+          createTextEvent({
+            engine: ENGINE,
+            delta: text,
+            accumulated: state.lastText,
+          }),
+        ];
       }
       return [];
     }

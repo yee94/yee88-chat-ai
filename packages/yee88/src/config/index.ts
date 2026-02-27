@@ -7,7 +7,7 @@ import { homedir } from "os";
 
 const TOML = require("@iarna/toml");
 
-export const HOME_CONFIG_PATH = join(homedir(), ".yee88", "yee88.toml");
+export const HOME_CONFIG_PATH = join(homedir(), ".yee88", "config.toml");
 
 export class ConfigError extends Error {
   constructor(message: string) {
@@ -30,13 +30,31 @@ export const ProjectConfigSchema = z.object({
 
 export type ProjectConfig = z.infer<typeof ProjectConfigSchema>;
 
+export const PlatformSchema = z.enum(["telegram", "dingtalk"]);
+export type Platform = z.infer<typeof PlatformSchema>;
+
 export const AppConfigSchema = z.object({
+  default_platform: PlatformSchema.optional(),
   telegram: z
     .object({
       bot_token: z.string().optional(),
       allowed_users: z.array(z.number()),
     })
     .default({ allowed_users: [] }),
+  dingtalk: z
+    .object({
+      client_id: z.string().optional(),
+      client_secret: z.string().optional(),
+      robot_code: z.string().optional(),
+      corp_id: z.string().optional(),
+      agent_id: z.string().optional(),
+      /** 消息交互方式: "ai_card" (流式卡片), "recall" (撤回重发), "webhook" (session webhook) */
+      reply_mode: z.enum(["ai_card", "recall", "webhook"]).default("ai_card"),
+      /** AI Card 自定义模板 ID（留空使用钉钉标准模板） */
+      card_template_id: z.string().optional(),
+      allowed_users: z.array(z.string()).default([]),
+    })
+    .default({ reply_mode: "ai_card" as const, allowed_users: [] }),
   default_engine: z.string().default("opencode"),
   default_project: z.string().optional(),
   system_prompt: z.string().optional(),

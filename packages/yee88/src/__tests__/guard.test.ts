@@ -19,6 +19,7 @@ describe("isAuthorized", () => {
     const config: AppConfig = {
       default_engine: "opencode",
       telegram: { allowed_users: [] },
+      dingtalk: { reply_mode: "ai_card" as const, allowed_users: [] },
       projects: {},
     };
     expect(isAuthorized(mockMessage(12345), config)).toBe(true);
@@ -29,6 +30,7 @@ describe("isAuthorized", () => {
     const config: AppConfig = {
       default_engine: "opencode",
       telegram: { allowed_users: [111, 222] },
+      dingtalk: { reply_mode: "ai_card" as const, allowed_users: [] },
       projects: {},
     };
     expect(isAuthorized(mockMessage(111), config)).toBe(true);
@@ -39,6 +41,7 @@ describe("isAuthorized", () => {
     const config: AppConfig = {
       default_engine: "opencode",
       telegram: { allowed_users: [111, 222] },
+      dingtalk: { reply_mode: "ai_card" as const, allowed_users: [] },
       projects: {},
     };
     expect(isAuthorized(mockMessage(333), config)).toBe(false);
@@ -49,6 +52,7 @@ describe("isAuthorized", () => {
     const config: AppConfig = {
       default_engine: "opencode",
       telegram: { allowed_users: [111] },
+      dingtalk: { reply_mode: "ai_card" as const, allowed_users: [] },
       projects: {},
     };
     expect(isAuthorized(mockMessage("abc"), config)).toBe(false);
