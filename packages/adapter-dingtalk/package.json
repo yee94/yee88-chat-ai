@@ -1,7 +1,7 @@
 {
   "name": "@chat-adapter/dingtalk",
   "version": "0.1.0",
-  "description": "DingTalk adapter for chat",
+  "description": "DingTalk adapter for Chat SDK with Stream mode support",
   "type": "module",
   "main": "./dist/index.mjs",
   "module": "./dist/index.mjs",
@@ -24,13 +24,23 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
+    "@chat-adapter/shared": "^4.15.0",
     "chat": "^4.15.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
+    "dingtalk-stream": "^2.1.4",
     "tsdown": "^0.17.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
+  },
+  "peerDependencies": {
+    "dingtalk-stream": "^2.1.4"
+  },
+  "peerDependenciesMeta": {
+    "dingtalk-stream": {
+      "optional": true
+    }
   },
   "keywords": [
     "chat",
