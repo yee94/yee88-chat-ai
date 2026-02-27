@@ -15,7 +15,9 @@
   },
   "devDependencies": {
     "@types/node": "^20.4.5",
+    "tsdown": "^0.17.2",
     "turbo": "^2.6.3",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^2.1.8"
   }
 }
