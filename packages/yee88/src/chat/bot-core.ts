@@ -120,6 +120,8 @@ function buildProgressMarkdown(
 export interface HandleMessageOptions {
   /** 流式消息完成后的回调，用于通知 adapter 完成流式输出（如 DingTalk AI Card finalize） */
   onStreamFinalize?: (sentMessage: SentMessage, finalContent: string) => Promise<void>;
+  /** DingTalk reply_mode，用于判断是否使用逐条消息发送 */
+  replyMode?: "ai_card" | "recall" | "webhook" | "incremental";
 }
 
 /** 核心消息处理逻辑 */
@@ -262,6 +264,11 @@ export async function handleMessage(
               actionLines[idx] = line;
             } else {
               actionLines.push(line);
+            }
+
+            // 逐条消息模式：每个 action 完成后发送独立消息
+            if (options?.replyMode === "incremental") {
+              await thread.post({ markdown: line });
             }
           }
 

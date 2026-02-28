@@ -62,6 +62,7 @@ export function createDingTalkBot(config: AppConfig) {
           { markdown: finalContent },
         );
       },
+      replyMode: dingtalkConfig.reply_mode,
     });
   }
 

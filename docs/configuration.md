@@ -45,6 +45,13 @@ corp_id = "dingxxxxxxxx"
 # 应用 AgentId (可选)
 agent_id = "123456789"
 
+# 消息交互方式 (可选，默认 "ai_card")
+# "ai_card"     - AI Card 流式卡片（打字机效果，仅群聊）
+# "recall"      - 撤回重发模式
+# "webhook"     - Session Webhook 模式
+# "incremental" - 逐条消息发送（每个 action 完成后发送独立消息）
+reply_mode = "ai_card"
+
 # 允许使用 bot 的用户 ID 列表
 # 空数组 = 允许所有人
 # DingTalk 用户 ID 是字符串格式
@@ -106,6 +113,7 @@ path = "/home/user/projects/another"
 | `robot_code` | string | 是* | 机器人编码 |
 | `corp_id` | string | 否 | 企业 CorpId |
 | `agent_id` | string | 否 | 应用 AgentId |
+| `reply_mode` | string | 否 | 消息交互方式：`ai_card`(默认)、`recall`、`webhook`、`incremental` |
 | `allowed_users` | string[] | 否 | 允许的用户 ID 列表，空数组允许所有人 |
 
 *使用 DingTalk 平台时必填
