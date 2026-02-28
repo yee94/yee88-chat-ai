@@ -8,6 +8,7 @@ import { formatElapsed, formatHeader, assembleMarkdownParts, prepareMultiMessage
 import { mergeTopicContext, formatContext } from "../topic/context.ts";
 import type { Yee88Event, ResumeToken } from "../model.ts";
 import { type AppConfig, projectForChat, resolveProject } from "../config/index.ts";
+import { tryHandleCommand } from "./commands/index.ts";
 
 /** Bot 线程状态 */
 export interface BotThreadState {
@@ -136,6 +137,17 @@ export async function handleMessage(
   const chatId = thread.channelId;
   const ownerId = message.author.userId;
   const topicThreadId = parseTopicId(thread, platform);
+
+  // 尝试处理斜杠命令（/new, /model, /help 等）
+  const handled = await tryHandleCommand(text, {
+    services,
+    thread,
+    platform,
+    chatId,
+    ownerId,
+    topicThreadId,
+  });
+  if (handled) return;
 
   // 解析 topic context → 合并 chat 默认项目
   const boundContext = topicThreadId

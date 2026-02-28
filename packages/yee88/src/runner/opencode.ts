@@ -290,7 +290,8 @@ export function translateEvent(
 /** OpenCode CLI Runner */
 export class OpenCodeRunner implements Runner {
   readonly engine = ENGINE;
-  readonly model: string | undefined;
+  model: string | undefined;
+  private modelOverride: string | undefined;
   private readonly cmd: string;
   private readonly sessionTitle: string;
 
@@ -299,6 +300,16 @@ export class OpenCodeRunner implements Runner {
     this.model = options?.model ?? readOpenCodeModel();
     this.cmd = options?.cmd ?? "opencode";
     this.sessionTitle = options?.sessionTitle ?? "opencode";
+  }
+
+  /** 设置模型覆盖（/model set 命令使用） */
+  setModelOverride(model: string | undefined): void {
+    this.modelOverride = model;
+  }
+
+  /** 获取当前生效的模型（override > 构造参数 > 配置文件） */
+  getEffectiveModel(): string | undefined {
+    return this.modelOverride ?? this.model;
   }
 
   isResumeLine(line: string): boolean {
@@ -330,7 +341,7 @@ export class OpenCodeRunner implements Runner {
     if (resume) {
       args.push("--session", resume.value);
     }
-    const model = runOptions?.model ?? this.model;
+    const model = runOptions?.model ?? this.getEffectiveModel();
     if (model) {
       args.push("--model", model);
     }
