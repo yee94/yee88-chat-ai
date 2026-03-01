@@ -4,7 +4,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import type { Yee88Event, ResumeToken, Action, ActionKind } from "../model.ts";
-import { createStartedEvent, createActionEvent, createTextEvent, createCompletedEvent } from "../model.ts";
+import { createStartedEvent, createActionEvent, createTextEvent, createTextFinishedEvent, createCompletedEvent } from "../model.ts";
 import { decodeEvent, type OpenCodeEvent } from "../schema/opencode.ts";
 import type { Runner, RunOptions } from "./types.ts";
 
@@ -243,6 +243,17 @@ export function translateEvent(
           }),
         ];
       }
+
+      // reason=tool-calls：agent 一轮文本输出完毕，转去调用工具
+      // 将当前累积文本作为中间片段发出，然后重置 lastText
+      if (reason === "tool-calls" && state.lastText) {
+        const finished = createTextFinishedEvent({
+          engine: ENGINE,
+          text: state.lastText,
+        });
+        state.lastText = null;
+        return [finished];
+      }
       return [];
     }
 
@@ -360,7 +371,10 @@ export class OpenCodeRunner implements Runner {
     const args = this.buildArgs(prompt, resume, runOptions);
     const state = createStreamState();
 
-    consola.info(`[opencode] spawning: ${this.cmd} ${args.slice(0, 3).join(" ")} ...`);
+    // 打印完整参数（隐藏 prompt 内容）
+    const argsPreview = args.filter(a => a !== "--").map(a => a.length > 80 ? a.slice(0, 77) + "..." : a);
+    consola.info(`[opencode] spawning: ${this.cmd} ${argsPreview.join(" ")}`);
+    consola.info(`[opencode] model: override=${this.modelOverride ?? "none"}, base=${this.model ?? "none"}, effective=${this.getEffectiveModel() ?? "none"}`);
 
     const cwd = runOptions?.cwd;
     if (cwd) {

@@ -260,4 +260,142 @@ describe("translateEvent edge cases", () => {
     );
     expect(events).toHaveLength(0);
   });
+
+  // --- agent 多轮 step 分片文本测试 ---
+
+  test("step_finish(tool-calls) emits text_finished with accumulated text and resets lastText", () => {
+    const state = makeState();
+    state.sessionId = "ses_abc";
+    translateEvent({ type: "text", part: { text: "我来帮你" } }, "t", state);
+    translateEvent({ type: "text", part: { text: "分析代码" } }, "t", state);
+
+    const events = translateEvent(
+      { type: "step_finish", part: { reason: "tool-calls" } },
+      "t",
+      state
+    );
+
+    expect(events).toHaveLength(1);
+    expect(events[0]!.type).toBe("text_finished");
+    if (events[0]!.type === "text_finished") {
+      expect(events[0]!.text).toBe("我来帮你分析代码");
+    }
+    // lastText 应该被重置
+    expect(state.lastText).toBeNull();
+  });
+
+  test("step_finish(tool-calls) without text does not emit text_finished", () => {
+    const state = makeState();
+    state.sessionId = "ses_abc";
+    // 没有 text 事件，直接 tool-calls
+    const events = translateEvent(
+      { type: "step_finish", part: { reason: "tool-calls" } },
+      "t",
+      state
+    );
+    expect(events).toHaveLength(0);
+  });
+
+  test("multi-step agent: each step text is independent, final answer is last step only", () => {
+    const state = makeState();
+    state.sessionId = "ses_abc";
+
+    // Step 1: agent 思考 → tool-calls
+    translateEvent({ type: "step_start", sessionID: "ses_abc" }, "t", state);
+    translateEvent({ type: "text", part: { text: "第一轮思考" } }, "t", state);
+    const step1Events = translateEvent(
+      { type: "step_finish", part: { reason: "tool-calls" } },
+      "t",
+      state
+    );
+    expect(step1Events).toHaveLength(1);
+    expect(step1Events[0]!.type).toBe("text_finished");
+    if (step1Events[0]!.type === "text_finished") {
+      expect(step1Events[0]!.text).toBe("第一轮思考");
+    }
+    expect(state.lastText).toBeNull();
+
+    // Tool execution (不影响 lastText)
+    translateEvent({
+      type: "tool_use",
+      part: { tool: "read_file", callID: "call_1", state: { input: { file_path: "/foo.ts" }, status: "completed", output: "content", metadata: { exit: 0 } } },
+    }, "t", state);
+
+    // Step 2: agent 再次思考 → tool-calls
+    translateEvent({ type: "step_start", sessionID: "ses_abc" }, "t", state);
+    translateEvent({ type: "text", part: { text: "第二轮思考" } }, "t", state);
+    const step2Events = translateEvent(
+      { type: "step_finish", part: { reason: "tool-calls" } },
+      "t",
+      state
+    );
+    expect(step2Events).toHaveLength(1);
+    if (step2Events[0]!.type === "text_finished") {
+      expect(step2Events[0]!.text).toBe("第二轮思考");
+    }
+    expect(state.lastText).toBeNull();
+
+    // Tool execution
+    translateEvent({
+      type: "tool_use",
+      part: { tool: "edit", callID: "call_2", state: { input: { file_path: "/bar.ts" }, status: "completed", output: "ok", metadata: { exit: 0 } } },
+    }, "t", state);
+
+    // Step 3: agent 最终回答 → stop
+    translateEvent({ type: "step_start", sessionID: "ses_abc" }, "t", state);
+    translateEvent({ type: "text", part: { text: "最终回答" } }, "t", state);
+    const finalEvents = translateEvent(
+      { type: "step_finish", part: { reason: "stop" } },
+      "t",
+      state
+    );
+    expect(finalEvents).toHaveLength(1);
+    expect(finalEvents[0]!.type).toBe("completed");
+    if (finalEvents[0]!.type === "completed") {
+      // 最终 answer 只包含最后一轮的文本，不再是所有轮次的合并
+      expect(finalEvents[0]!.answer).toBe("最终回答");
+      expect(finalEvents[0]!.ok).toBe(true);
+    }
+  });
+
+  test("multi-step: text accumulated within a step is correct", () => {
+    const state = makeState();
+    state.sessionId = "ses_abc";
+
+    // Step 1: 多个 text delta
+    translateEvent({ type: "step_start", sessionID: "ses_abc" }, "t", state);
+    const t1 = translateEvent({ type: "text", part: { text: "Hello " } }, "t", state);
+    expect(t1[0]!.type).toBe("text");
+    if (t1[0]!.type === "text") {
+      expect(t1[0]!.accumulated).toBe("Hello ");
+    }
+
+    const t2 = translateEvent({ type: "text", part: { text: "World" } }, "t", state);
+    if (t2[0]!.type === "text") {
+      expect(t2[0]!.accumulated).toBe("Hello World");
+    }
+
+    // tool-calls → text_finished + reset
+    const fin = translateEvent(
+      { type: "step_finish", part: { reason: "tool-calls" } },
+      "t",
+      state
+    );
+    if (fin[0]!.type === "text_finished") {
+      expect(fin[0]!.text).toBe("Hello World");
+    }
+
+    // Step 2: 新的 text 从空开始累积
+    translateEvent({ type: "step_start", sessionID: "ses_abc" }, "t", state);
+    const t3 = translateEvent({ type: "text", part: { text: "New " } }, "t", state);
+    if (t3[0]!.type === "text") {
+      // accumulated 应该从新的 step 开始，不包含上一轮的内容
+      expect(t3[0]!.accumulated).toBe("New ");
+    }
+
+    const t4 = translateEvent({ type: "text", part: { text: "Step" } }, "t", state);
+    if (t4[0]!.type === "text") {
+      expect(t4[0]!.accumulated).toBe("New Step");
+    }
+  });
 });

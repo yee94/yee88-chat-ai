@@ -10,8 +10,9 @@ import { formatElapsed, formatHeader, assembleMarkdownParts, prepareMultiMessage
 import { TopicStateStore, type RunContext } from "../topic/state.ts";
 import { mergeTopicContext, formatContext } from "../topic/context.ts";
 import type { Yee88Event, ResumeToken } from "../model.ts";
-import { type AppConfig, projectForChat, resolveProject } from "../config/index.ts";
+import { type AppConfig, projectForChat, resolveProject, resolveSystemPrompt } from "../config/index.ts";
 import { isAuthorized, unauthorizedMessage } from "./guard.ts";
+import { tryHandleCommand } from "./commands/index.ts";
 
 /** Bot 线程状态 */
 interface BotThreadState {
@@ -27,7 +28,7 @@ export function createBot(config: AppConfig) {
   }
 
   const stateAdapter = new MemoryStateAdapter();
-  const runner = new OpenCodeRunner({ model: undefined });
+  const runner = new OpenCodeRunner({ model: config.default_model });
   const sessionStore = new SessionStore(
     `${process.env["HOME"]}/.yee88/sessions.json`
   );
@@ -109,7 +110,7 @@ export function createBot(config: AppConfig) {
       parts.push(actionLines.join("\n"));
     }
 
-    return parts.join("\n\n");
+    return parts.join("\n");
   }
 
   // 消息处理核心逻辑
@@ -127,6 +128,17 @@ export function createBot(config: AppConfig) {
     const chatId = thread.channelId;
     const ownerId = message.author.userId;
     const topicThreadId = parseTopicId(thread);
+
+    // 尝试处理斜杠命令（/new, /model, /help 等）
+    const handled = await tryHandleCommand(text, {
+      services: { runner, config, sessionStore, topicStore },
+      thread,
+      platform: "telegram",
+      chatId,
+      ownerId,
+      topicThreadId,
+    });
+    if (handled) return;
 
     // 解析 topic context → 合并 chat 默认项目
     const boundContext = topicThreadId
@@ -159,7 +171,7 @@ export function createBot(config: AppConfig) {
 
     // 立即发送初始进度消息，不等待 runner 启动
     const initHeader = formatHeader(0, null, { label: "▸", engine: "opencode" });
-    const progressMsg: SentMessage = await thread.post({ markdown: `${initHeader}\n\n_Thinking..._` });
+    const progressMsg: SentMessage = await thread.post({ markdown: `${initHeader}\n_Thinking..._` });
 
     let lastUpdateTime = Date.now();
     let finalAnswer = "";
@@ -199,7 +211,9 @@ export function createBot(config: AppConfig) {
     };
 
     try {
-      for await (const event of runner.run(text, resume, { cwd })) {
+      // 解析 system_prompt（项目级 > 全局级），仅首次会话时生效
+      const systemPrompt = resolveSystemPrompt(config, effectiveContext?.project ?? undefined);
+      for await (const event of runner.run(text, resume, { cwd, system: systemPrompt })) {
         switch (event.type) {
           case "started": {
             finalResume = event.resume;
@@ -239,6 +253,13 @@ export function createBot(config: AppConfig) {
             break;
           }
 
+          case "text_finished": {
+            // Telegram recall 模式：中间文本片段不单独发送，
+            // 流式预览已通过 text 事件实时更新，这里只重置预览状态
+            streamingText = null;
+            break;
+          }
+
           case "completed": {
             // 完成后不再需要流式更新
             pendingUpdate = false;
@@ -266,7 +287,7 @@ export function createBot(config: AppConfig) {
             const parts = {
               header,
               body: finalAnswer || undefined,
-              footer: footerParts.length > 0 ? footerParts.join("\n\n") : undefined,
+              footer: footerParts.length > 0 ? footerParts.join("\n") : undefined,
             };
 
             const messages = prepareMultiMessage(parts);
@@ -300,9 +321,9 @@ export function createBot(config: AppConfig) {
       consola.error("[bot] runner error:", err);
       const errorMsg = err instanceof Error ? err.message : String(err);
       try {
-        await progressMsg.edit({ markdown: `✗ · opencode · error\n\n${errorMsg}` });
+        await progressMsg.edit({ markdown: `✗ · opencode · error\n${errorMsg}` });
       } catch {
-        await thread.post({ markdown: `✗ · opencode · error\n\n${errorMsg}` });
+        await thread.post({ markdown: `✗ · opencode · error\n${errorMsg}` });
       }
     }
   }

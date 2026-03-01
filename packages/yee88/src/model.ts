@@ -54,6 +54,13 @@ export interface TextEvent {
   accumulated: string;
 }
 
+/** 一轮 step 的文本输出完毕（agent 转去调用工具），携带该轮完整文本 */
+export interface TextFinishedEvent {
+  type: "text_finished";
+  engine: EngineId;
+  text: string;
+}
+
 export interface CompletedEvent {
   type: "completed";
   engine: EngineId;
@@ -64,7 +71,7 @@ export interface CompletedEvent {
   usage?: Record<string, unknown>;
 }
 
-export type Yee88Event = StartedEvent | ActionEvent | TextEvent | CompletedEvent;
+export type Yee88Event = StartedEvent | ActionEvent | TextEvent | TextFinishedEvent | CompletedEvent;
 
 // Helper constructors
 export function createStartedEvent(params: Omit<StartedEvent, "type">): StartedEvent {
@@ -77,6 +84,10 @@ export function createActionEvent(params: Omit<ActionEvent, "type">): ActionEven
 
 export function createTextEvent(params: Omit<TextEvent, "type">): TextEvent {
   return { type: "text", ...params };
+}
+
+export function createTextFinishedEvent(params: Omit<TextFinishedEvent, "type">): TextFinishedEvent {
+  return { type: "text_finished", ...params };
 }
 
 export function createCompletedEvent(params: Omit<CompletedEvent, "type">): CompletedEvent {

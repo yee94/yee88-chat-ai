@@ -104,6 +104,188 @@ describe("Integration: Markdown → Multi-message", () => {
   });
 });
 
+describe("Integration: Multi-step agent event flow (bailian/MiniMax-M2.5)", () => {
+  // 模拟 MiniMax-M2.5 模型的典型多轮 agent 行为：
+  // 思考 → 工具调用 → 思考 → 工具调用 → 最终回答
+  const { translateEvent } = require("../runner/opencode.ts");
+
+  function makeState() {
+    return {
+      pendingActions: new Map(),
+      lastText: null as string | null,
+      noteSeq: 0,
+      sessionId: null as string | null,
+      emittedStarted: false,
+      sawStepFinish: false,
+    };
+  }
+
+  test("full multi-step flow produces correct text_finished and completed events", () => {
+    const state = makeState();
+    const allEvents: Array<{ type: string; [key: string]: unknown }> = [];
+
+    const collect = (event: any) => {
+      const events = translateEvent(event, "test", state, "bailian/MiniMax-M2.5");
+      allEvents.push(...events);
+      return events;
+    };
+
+    // Step 1: agent 开始思考
+    collect({ type: "step_start", sessionID: "ses_minimax_001" });
+    collect({ type: "text", part: { text: "让我先查看一下" } });
+    collect({ type: "text", part: { text: "项目结构..." } });
+    // agent 决定调用工具
+    collect({ type: "step_finish", part: { reason: "tool-calls" } });
+
+    // 工具执行
+    collect({
+      type: "tool_use",
+      sessionID: "ses_minimax_001",
+      part: {
+        tool: "read_file",
+        callID: "call_001",
+        state: { input: { file_path: "/src/index.ts" }, status: "pending" },
+      },
+    });
+    collect({
+      type: "tool_use",
+      sessionID: "ses_minimax_001",
+      part: {
+        tool: "read_file",
+        callID: "call_001",
+        state: {
+          input: { file_path: "/src/index.ts" },
+          status: "completed",
+          output: "export default {}",
+          metadata: { exit: 0 },
+        },
+      },
+    });
+
+    // Step 2: agent 再次思考
+    collect({ type: "step_start", sessionID: "ses_minimax_001" });
+    collect({ type: "text", part: { text: "看完代码后，" } });
+    collect({ type: "text", part: { text: "我需要修改这个文件" } });
+    collect({ type: "step_finish", part: { reason: "tool-calls" } });
+
+    // 工具执行
+    collect({
+      type: "tool_use",
+      sessionID: "ses_minimax_001",
+      part: {
+        tool: "edit",
+        callID: "call_002",
+        state: { input: { file_path: "/src/index.ts" }, status: "pending" },
+      },
+    });
+    collect({
+      type: "tool_use",
+      sessionID: "ses_minimax_001",
+      part: {
+        tool: "edit",
+        callID: "call_002",
+        state: {
+          input: { file_path: "/src/index.ts" },
+          status: "completed",
+          output: "ok",
+          metadata: { exit: 0 },
+        },
+      },
+    });
+
+    // Step 3: 最终回答
+    collect({ type: "step_start", sessionID: "ses_minimax_001" });
+    collect({ type: "text", part: { text: "修改完成！以下是变更摘要。" } });
+    collect({ type: "step_finish", part: { reason: "stop" } });
+
+    // 验证事件流
+    const textFinished = allEvents.filter((e) => e.type === "text_finished");
+    const completed = allEvents.filter((e) => e.type === "completed");
+    const started = allEvents.filter((e) => e.type === "started");
+    const actions = allEvents.filter((e) => e.type === "action");
+
+    // 应该有 1 个 started
+    expect(started).toHaveLength(1);
+
+    // 应该有 2 个 text_finished（Step 1 和 Step 2 各一个）
+    expect(textFinished).toHaveLength(2);
+    expect((textFinished[0] as any).text).toBe("让我先查看一下项目结构...");
+    expect((textFinished[1] as any).text).toBe("看完代码后，我需要修改这个文件");
+
+    // 应该有 4 个 action（2 started + 2 completed）
+    expect(actions).toHaveLength(4);
+
+    // 应该有 1 个 completed，answer 只包含最后一轮的文本
+    expect(completed).toHaveLength(1);
+    expect((completed[0] as any).answer).toBe("修改完成！以下是变更摘要。");
+    expect((completed[0] as any).ok).toBe(true);
+  });
+
+  test("agent with no intermediate text (direct tool calls) works correctly", () => {
+    const state = makeState();
+    const allEvents: Array<{ type: string; [key: string]: unknown }> = [];
+
+    const collect = (event: any) => {
+      const events = translateEvent(event, "test", state, "bailian/MiniMax-M2.5");
+      allEvents.push(...events);
+    };
+
+    // Step 1: 直接调用工具，没有思考文本
+    collect({ type: "step_start", sessionID: "ses_minimax_002" });
+    collect({ type: "step_finish", part: { reason: "tool-calls" } });
+
+    // 工具执行
+    collect({
+      type: "tool_use",
+      part: {
+        tool: "bash",
+        callID: "call_003",
+        state: { input: { command: "ls" }, status: "completed", output: "files", metadata: { exit: 0 } },
+      },
+    });
+
+    // Step 2: 最终回答
+    collect({ type: "step_start", sessionID: "ses_minimax_002" });
+    collect({ type: "text", part: { text: "目录内容如上" } });
+    collect({ type: "step_finish", part: { reason: "stop" } });
+
+    const textFinished = allEvents.filter((e) => e.type === "text_finished");
+    const completed = allEvents.filter((e) => e.type === "completed");
+
+    // 没有中间文本，不应该有 text_finished
+    expect(textFinished).toHaveLength(0);
+
+    // 最终 answer 正确
+    expect(completed).toHaveLength(1);
+    expect((completed[0] as any).answer).toBe("目录内容如上");
+  });
+
+  test("agent with single step (no tool calls) works correctly", () => {
+    const state = makeState();
+    const allEvents: Array<{ type: string; [key: string]: unknown }> = [];
+
+    const collect = (event: any) => {
+      const events = translateEvent(event, "test", state, "bailian/MiniMax-M2.5");
+      allEvents.push(...events);
+    };
+
+    // 单步直接回答
+    collect({ type: "step_start", sessionID: "ses_minimax_003" });
+    collect({ type: "text", part: { text: "你好！我是 AI 助手。" } });
+    collect({ type: "step_finish", part: { reason: "stop" } });
+
+    const textFinished = allEvents.filter((e) => e.type === "text_finished");
+    const completed = allEvents.filter((e) => e.type === "completed");
+
+    // 没有 tool-calls，不应该有 text_finished
+    expect(textFinished).toHaveLength(0);
+
+    // 最终 answer 正确
+    expect(completed).toHaveLength(1);
+    expect((completed[0] as any).answer).toBe("你好！我是 AI 助手。");
+  });
+});
+
 describe("Integration: MemoryStateAdapter full lifecycle", () => {
   test("subscribe → lock → state → unsubscribe", async () => {
     const state = new MemoryStateAdapter();

@@ -146,15 +146,15 @@ describe("trimBody", () => {
 });
 
 describe("assembleMarkdownParts", () => {
-  test("joins parts with double newline", () => {
+  test("joins parts with single newline", () => {
     expect(assembleMarkdownParts({ header: "H", body: "B", footer: "F" })).toBe(
-      "H\n\nB\n\nF"
+      "H\nB\nF"
     );
   });
 
   test("skips undefined parts", () => {
     expect(assembleMarkdownParts({ header: "H" })).toBe("H");
-    expect(assembleMarkdownParts({ header: "H", body: "B" })).toBe("H\n\nB");
+    expect(assembleMarkdownParts({ header: "H", body: "B" })).toBe("H\nB");
   });
 });
 
@@ -162,7 +162,7 @@ describe("prepareMultiMessage", () => {
   test("single short message", () => {
     const result = prepareMultiMessage({ header: "H", body: "B" });
     expect(result).toHaveLength(1);
-    expect(result[0]).toBe("H\n\nB");
+    expect(result[0]).toBe("H\nB");
   });
 
   test("adds continuation headers for splits", () => {
