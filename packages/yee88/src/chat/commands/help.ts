@@ -10,6 +10,7 @@ commands:
 /model — view/set model
 /model set <model> — switch model
 /model clear — reset to default model
+/topic list — list all topics
 /help — show this help
 
 send any message to chat with the AI\\.

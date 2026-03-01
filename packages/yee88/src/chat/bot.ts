@@ -6,7 +6,7 @@ import { MemoryStateAdapter } from "./state.ts";
 import { OpenCodeRunner } from "../runner/opencode.ts";
 import { SessionStore } from "../session/store.ts";
 import { ThreadScheduler, type ThreadJob } from "../scheduler/index.ts";
-import { formatElapsed, formatHeader, assembleMarkdownParts, prepareMultiMessage } from "../markdown/index.ts";
+import { formatFooter, prepareMultiMessage } from "../markdown/index.ts";
 import { TopicStateStore, type RunContext } from "../topic/state.ts";
 import { mergeTopicContext, formatContext } from "../topic/context.ts";
 import type { Yee88Event, ResumeToken } from "../model.ts";
@@ -96,8 +96,7 @@ export function createBot(config: AppConfig) {
     streamingText: string | null,
     label = "▸"
   ): string {
-    const header = formatHeader(elapsed, null, { label, engine: "opencode" });
-    const parts: string[] = [header];
+    const parts: string[] = [];
 
     if (streamingText) {
       const text = streamingText.length > MAX_STREAMING_TEXT
@@ -110,7 +109,10 @@ export function createBot(config: AppConfig) {
       parts.push(actionLines.join("\n"));
     }
 
-    return parts.join("\n");
+    // footer：状态 + 耗时
+    parts.push(formatFooter(elapsed, { label }));
+
+    return parts.join("\n\n");
   }
 
   // 消息处理核心逻辑
@@ -170,8 +172,7 @@ export function createBot(config: AppConfig) {
     const startTime = Date.now();
 
     // 立即发送初始进度消息，不等待 runner 启动
-    const initHeader = formatHeader(0, null, { label: "▸", engine: "opencode" });
-    const progressMsg: SentMessage = await thread.post({ markdown: `${initHeader}\n_Thinking..._` });
+    const progressMsg: SentMessage = await thread.post({ markdown: "_Thinking..._" });
 
     let lastUpdateTime = Date.now();
     let finalAnswer = "";
@@ -226,6 +227,9 @@ export function createBot(config: AppConfig) {
           }
 
           case "action": {
+            // show_actions 关闭时跳过 action 行的收集和发送
+            if (!config.show_actions) break;
+
             const icon = event.phase === "completed"
               ? (event.ok !== false ? "✓" : "✗")
               : "▸";
@@ -272,22 +276,11 @@ export function createBot(config: AppConfig) {
 
             const elapsed2 = (Date.now() - startTime) / 1000;
             const statusIcon = event.ok ? "✓" : "✗";
-            const header = formatHeader(elapsed2, null, { label: statusIcon, engine: "opencode" });
 
-            // 构建 footer：actions + model
-            const footerParts: string[] = [];
-            if (actionLines.length > 0) {
-              footerParts.push(actionLines.join("\n"));
-            }
-            if (currentModel) {
-              footerParts.push(`\`model: ${currentModel}\``);
-            }
-
-            // 构建最终消息
+            // 构建最终消息（无 header，footer 包含状态 + 耗时 + model）
             const parts = {
-              header,
               body: finalAnswer || undefined,
-              footer: footerParts.length > 0 ? footerParts.join("\n") : undefined,
+              footer: formatFooter(elapsed2, { label: statusIcon, model: currentModel }),
             };
 
             const messages = prepareMultiMessage(parts);
@@ -321,9 +314,9 @@ export function createBot(config: AppConfig) {
       consola.error("[bot] runner error:", err);
       const errorMsg = err instanceof Error ? err.message : String(err);
       try {
-        await progressMsg.edit({ markdown: `✗ · opencode · error\n${errorMsg}` });
+        await progressMsg.edit({ markdown: `${errorMsg}\n\n✗ · error` });
       } catch {
-        await thread.post({ markdown: `✗ · opencode · error\n${errorMsg}` });
+        await thread.post({ markdown: `${errorMsg}\n\n✗ · error` });
       }
     }
   }

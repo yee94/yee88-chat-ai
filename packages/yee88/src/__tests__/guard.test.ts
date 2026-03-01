@@ -18,6 +18,8 @@ describe("isAuthorized", () => {
   test("allows all when allowed_users is empty", () => {
     const config: AppConfig = {
       default_engine: "opencode",
+      show_actions: false,
+      debug: false,
       telegram: { allowed_users: [] },
       dingtalk: { reply_mode: "ai_card" as const, allowed_users: [] },
       projects: {},
@@ -29,6 +31,8 @@ describe("isAuthorized", () => {
   test("allows listed users", () => {
     const config: AppConfig = {
       default_engine: "opencode",
+      show_actions: false,
+      debug: false,
       telegram: { allowed_users: [111, 222] },
       dingtalk: { reply_mode: "ai_card" as const, allowed_users: [] },
       projects: {},
@@ -40,6 +44,8 @@ describe("isAuthorized", () => {
   test("rejects unlisted users", () => {
     const config: AppConfig = {
       default_engine: "opencode",
+      show_actions: false,
+      debug: false,
       telegram: { allowed_users: [111, 222] },
       dingtalk: { reply_mode: "ai_card" as const, allowed_users: [] },
       projects: {},
@@ -51,6 +57,8 @@ describe("isAuthorized", () => {
   test("rejects non-numeric userId", () => {
     const config: AppConfig = {
       default_engine: "opencode",
+      show_actions: false,
+      debug: false,
       telegram: { allowed_users: [111] },
       dingtalk: { reply_mode: "ai_card" as const, allowed_users: [] },
       projects: {},

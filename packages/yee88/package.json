@@ -8,7 +8,7 @@
     "yee88": "./src/cli/index.ts"
   },
   "scripts": {
-    "dev": "bun --hot src/index.ts",
+    "dev": "NODE_ENV=development bun --hot src/index.ts",
     "start": "bun src/index.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit",

@@ -1,4 +1,5 @@
 // src/markdown/index.ts - Markdown 渲染和消息格式化
+import type { Action, ActionKind } from "../model.ts";
 
 const STATUS = {
   running: "▸",
@@ -12,7 +13,7 @@ const MAX_BODY_CHARS = 3500;
 const MAX_PROGRESS_CMD_LEN = 300;
 
 export interface MarkdownParts {
-  header: string;
+  header?: string;
   body?: string;
   footer?: string;
 }
@@ -37,9 +38,21 @@ export function formatHeader(
   step: number | null,
   options: { label: string; engine: string }
 ): string {
-  const elapsed = formatElapsed(elapsedS);
-  const parts = [options.label, options.engine, elapsed];
+  const parts = [options.label];
   if (step != null) parts.push(`step ${step}`);
+  return parts.join(HEADER_SEP);
+}
+
+/** 构建 footer：状态图标 + 耗时 + 可选的 model 信息 */
+export function formatFooter(
+  elapsedS: number,
+  options?: { label?: string; model?: string | null },
+): string {
+  const elapsed = formatElapsed(elapsedS);
+  const parts: string[] = [];
+  if (options?.label) parts.push(options.label);
+  parts.push(elapsed);
+  if (options?.model) parts.push(options.model);
   return parts.join(HEADER_SEP);
 }
 
@@ -66,6 +79,166 @@ export function actionSuffix(exitCode?: number): string {
     return ` (exit ${exitCode})`;
   }
   return "";
+}
+
+/** 格式化 JSON 预览（截断过长的字符串） */
+function formatJsonPreview(data: unknown, maxLength = 200): string {
+  let json: string;
+  try {
+    json = typeof data === "string" ? data : JSON.stringify(data, null, 2);
+  } catch {
+    json = String(data);
+  }
+  if (json.length > maxLength) {
+    return json.slice(0, maxLength) + "...";
+  }
+  return json;
+}
+
+/** 格式化工具调用开始消息（CoPaw 风格） */
+export function formatToolCallStart(
+  action: Action,
+  options?: { commandWidth?: number }
+): string {
+  const { kind, detail } = action;
+  const toolName = typeof detail?.name === "string" ? detail.name : "tool";
+  const toolInput = detail?.input;
+
+  // 对于工具类型，显示详细的调用信息
+  if (kind === "tool" || kind === "command" || kind === "subagent" || kind === "web_search") {
+    const argsPreview = formatJsonPreview(toolInput, 200);
+    return `🔧 **${toolName}**\n\`\`\`\n${argsPreview}\n\`\`\``;
+  }
+
+  // 其他类型使用简化格式
+  return `🔧 **${toolName}**`;
+}
+
+/** 格式化工具调用完成消息（CoPaw 风格） */
+export function formatToolCallComplete(
+  action: Action,
+  ok?: boolean,
+  options?: { commandWidth?: number }
+): string {
+  const { kind, detail } = action;
+  const toolName = typeof detail?.name === "string" ? detail.name : "tool";
+  const exitCode = typeof detail?.exit_code === "number" ? detail.exit_code : undefined;
+
+  // 确定状态图标
+  const isSuccess = ok !== false && exitCode !== 0;
+  const statusIcon = isSuccess ? "✅" : "❌";
+
+  // 对于工具类型，显示结果
+  if (kind === "tool" || kind === "command" || kind === "subagent" || kind === "web_search") {
+    const output = detail?.output_preview ?? detail?.output ?? detail?.error;
+    if (output) {
+      const outputPreview = formatJsonPreview(output, 300);
+      return `${statusIcon} **${toolName}**:\n\`\`\`\n${outputPreview}\n\`\`\``;
+    }
+  }
+
+  // 简化格式
+  return `${statusIcon} **${toolName}**`;
+}
+
+/** 格式化 action 标题（类似 CoPaw 风格） */
+export function formatActionTitle(
+  action: Action,
+  options?: { commandWidth?: number }
+): string {
+  const { kind, title, detail } = action;
+  const commandWidth = options?.commandWidth ?? MAX_PROGRESS_CMD_LEN;
+
+  // 如果有工具名称，优先使用
+  const toolName = typeof detail?.name === "string" ? detail.name : null;
+
+  switch (kind) {
+    case "command":
+      return `\`${shorten(title, commandWidth)}\``;
+
+    case "tool":
+      if (toolName && title && toolName !== title) {
+        return `${toolName} · ${shorten(title, commandWidth)}`;
+      }
+      return toolName ?? `tool: ${shorten(title, commandWidth)}`;
+
+    case "web_search":
+      if (toolName && title && toolName !== title) {
+        return `${toolName} · ${shorten(title, commandWidth)}`;
+      }
+      return toolName ?? `searched: ${shorten(title, commandWidth)}`;
+
+    case "subagent":
+      if (toolName && title && toolName !== title) {
+        return `${toolName} · ${shorten(title, commandWidth)}`;
+      }
+      return toolName ?? `subagent: ${shorten(title, commandWidth)}`;
+
+    case "file_change": {
+      // 尝试从 detail.changes 获取文件变更信息
+      const changes = detail?.changes;
+      if (Array.isArray(changes) && changes.length > 0) {
+        const rendered: string[] = [];
+        for (const raw of changes) {
+          const path = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>).path : null;
+          const changeKind = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>).kind : null;
+          if (typeof path !== "string" || !path) continue;
+          const verb = typeof changeKind === "string" && changeKind ? changeKind : "update";
+          rendered.push(`${verb} \`${path}\``);
+        }
+        if (rendered.length > 0) {
+          if (rendered.length > 3) {
+            const remaining = rendered.length - 3;
+            return `files: ${shorten(rendered.slice(0, 3).join(", ") + `, …(${remaining} more)`, commandWidth)}`;
+          }
+          return `files: ${shorten(rendered.join(", "), commandWidth)}`;
+        }
+      }
+      // fallback
+      return `files: ${shorten(title, commandWidth)}`;
+    }
+
+    case "note":
+    case "warning":
+      return shorten(title, commandWidth);
+
+    case "turn":
+    case "telemetry":
+      return "";
+
+    default:
+      return shorten(title, commandWidth);
+  }
+}
+
+/** 格式化 action 行（包含状态图标） */
+export function formatActionLine(
+  action: Action,
+  phase: string,
+  ok?: boolean,
+  options?: { commandWidth?: number; detailed?: boolean }
+): string {
+  // 详细模式：CoPaw 风格
+  if (options?.detailed) {
+    if (phase === "started") {
+      return formatToolCallStart(action, options);
+    }
+    if (phase === "completed") {
+      return formatToolCallComplete(action, ok, options);
+    }
+    // updated 阶段
+    return `${STATUS.update} **${action.detail?.name ?? action.title}**`;
+  }
+
+  // 简洁模式：原有格式
+  if (phase !== "completed") {
+    const status = phase === "updated" ? STATUS.update : STATUS.running;
+    return `${status} ${formatActionTitle(action, options)}`;
+  }
+  const exitCode = typeof action.detail?.exit_code === "number" ? action.detail.exit_code : undefined;
+  const status = actionStatus(true, ok, exitCode);
+  const suffix = actionSuffix(exitCode);
+  return `${status} ${formatActionTitle(action, options)}${suffix}`;
 }
 
 /** 分割 Markdown 正文，保持代码块完整性 */

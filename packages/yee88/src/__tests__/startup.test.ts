@@ -7,6 +7,8 @@ describe("generateStartupMessage", () => {
   test("generates message with defaults", async () => {
     const config: AppConfig = {
       default_engine: "opencode",
+      show_actions: false,
+      debug: false,
       telegram: { allowed_users: [] },
       dingtalk: { reply_mode: "ai_card" as const, allowed_users: [] },
       projects: {},
@@ -23,6 +25,8 @@ describe("generateStartupMessage", () => {
     const config: AppConfig = {
       default_engine: "opencode",
       default_project: "main",
+      show_actions: false,
+      debug: false,
       telegram: { allowed_users: [111] },
       dingtalk: { reply_mode: "ai_card" as const, allowed_users: [] },
       projects: {

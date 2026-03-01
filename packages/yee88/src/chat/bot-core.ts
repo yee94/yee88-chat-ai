@@ -1,10 +1,10 @@
 // src/chat/bot-core.ts - 核心消息处理逻辑（adapter 无关）
-import type { Thread, Message, SentMessage } from "chat";
+import type { Thread, Message, SentMessage, Author } from "chat";
 import { consola } from "consola";
 import { OpenCodeRunner } from "../runner/opencode.ts";
 import { SessionStore } from "../session/store.ts";
 import { TopicStateStore, type RunContext } from "../topic/state.ts";
-import { formatElapsed, formatHeader, assembleMarkdownParts, prepareMultiMessage, formatActionLine } from "../markdown/index.ts";
+import { formatFooter, prepareMultiMessage, formatActionLine, formatActionTitle } from "../markdown/index.ts";
 import { mergeTopicContext, formatContext } from "../topic/context.ts";
 import type { Yee88Event, ResumeToken } from "../model.ts";
 import { type AppConfig, projectForChat, resolveProject, resolveSystemPrompt } from "../config/index.ts";
@@ -85,6 +85,21 @@ export function saveResume(
   sessionStore.setSessionResume(chatId, ownerId, token);
 }
 
+/** 构建带会话上下文的 system_prompt，注入对话者身份信息 */
+function buildSystemPromptWithChatContext(
+  basePrompt: string | undefined,
+  author: Author,
+  platform: Platform,
+): string | undefined {
+  const name = author.fullName || author.userName;
+  if (!name) return basePrompt;
+
+  const chatContext = `[Chat Context] 你正在通过 ${platform === "telegram" ? "Telegram" : "DingTalk"} 与「${name}」对话。可以在回复中自然地使用对方的称呼。`;
+
+  if (!basePrompt) return chatContext;
+  return `${basePrompt}\n\n${chatContext}`;
+}
+
 /** 流式进度消息的最大文本预览长度 */
 const MAX_STREAMING_TEXT = 2000;
 /** 流式更新间隔（毫秒） */
@@ -99,8 +114,7 @@ function buildProgressMarkdown(
   streamingText: string | null,
   label = "▸"
 ): string {
-  const header = formatHeader(elapsed, null, { label, engine: "opencode" });
-  const parts: string[] = [header];
+  const parts: string[] = [];
 
   if (streamingText) {
     // 截断过长的流式文本
@@ -114,7 +128,10 @@ function buildProgressMarkdown(
     parts.push(actionLines.join("\n"));
   }
 
-  return parts.join("\n");
+  // footer：状态 + 耗时
+  parts.push(formatFooter(elapsed, { label }));
+
+  return parts.join("\n\n");
 }
 
 /** 消息处理选项 */
@@ -185,8 +202,7 @@ export async function handleMessage(
   // 立即发送初始进度消息，不等待 runner 启动（incremental 模式下跳过）
   let progressMsg: SentMessage | null = null;
   if (!isIncremental) {
-    const initHeader = formatHeader(0, null, { label: "▸", engine: "opencode" });
-    progressMsg = await thread.post({ markdown: `${initHeader}\n_Thinking..._` });
+    progressMsg = await thread.post({ markdown: `_Thinking..._` });
   }
 
   let lastUpdateTime = Date.now();
@@ -199,40 +215,15 @@ export async function handleMessage(
   let editInFlight: Promise<unknown> | null = null;
   let flushTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // incremental 模式：action 节流合并缓冲区
+  // incremental 模式：收集连续的 action，遇到非 action 事件时 flush
   const pendingActionLines: string[] = [];
-  let actionFlushTimer: ReturnType<typeof setTimeout> | null = null;
-  let firstActionSent = false; // 第一个 action 是否已发送
-  const ACTION_BATCH_INTERVAL = 2000; // 每次新 action 到来重置 2 秒窗口
 
-  /** incremental 模式：flush 缓冲区中的 action 行为一条消息 */
+  /** incremental 模式：flush 缓冲区中的 action 行为一条消息（emoji 标题 + list） */
   const flushActionBatch = async () => {
-    if (actionFlushTimer) {
-      clearTimeout(actionFlushTimer);
-      actionFlushTimer = null;
-    }
     if (pendingActionLines.length === 0) return;
     const batch = pendingActionLines.splice(0);
-    await thread.post({ markdown: batch.join("\n") });
-  };
-
-  /** incremental 模式：将 action 行加入缓冲区，第一个立即发送，后续滑动窗口合并 */
-  const enqueueActionLine = async (line: string) => {
-    pendingActionLines.push(line);
-    // 第一个 action 立即发送
-    if (!firstActionSent) {
-      firstActionSent = true;
-      await flushActionBatch();
-      return;
-    }
-    // 后续 action：每次到来都重置定时器（滑动窗口），持续合并
-    if (actionFlushTimer) {
-      clearTimeout(actionFlushTimer);
-    }
-    actionFlushTimer = setTimeout(() => {
-      actionFlushTimer = null;
-      flushActionBatch();
-    }, ACTION_BATCH_INTERVAL);
+    const list = batch.map((l) => `• ${l}`).join("\n");
+    await thread.post({ markdown: `🔧 工具调用\n${list}` });
   };
 
   /** 串行化 edit 操作，避免竞争（incremental 模式下不使用） */
@@ -297,7 +288,9 @@ export async function handleMessage(
 
   try {
     // 解析 system_prompt（项目级 > 全局级），仅首次会话时生效
-    const systemPrompt = resolveSystemPrompt(config, effectiveContext?.project ?? undefined);
+    const baseSystemPrompt = resolveSystemPrompt(config, effectiveContext?.project ?? undefined);
+    // 注入会话上下文：告诉 agent 当前对话者的身份信息
+    const systemPrompt = buildSystemPromptWithChatContext(baseSystemPrompt, message.author, platform);
     for await (const event of runner.run(text, resume, { cwd, model: effectiveModel, system: systemPrompt })) {
       debugEvent("bot-core", event);
 
@@ -314,12 +307,16 @@ export async function handleMessage(
         }
 
         case "action": {
-          // incremental 模式：简洁格式，只在 completed 时发送，节流合并
-          const line = formatActionLine(event.action, event.phase, event.ok, { detailed: false });
           debugLog("bot-core", `action: phase=${event.phase}, kind=${event.action.kind}, title=${event.action.title}, isIncremental=${isIncremental}`);
           if (isDebugEnabled()) {
             debugJson("bot-core", "action detail", event.action.detail);
           }
+
+          // show_actions 关闭时跳过 action 行的收集和发送
+          if (!config.show_actions) break;
+
+          // incremental 模式：简洁格式，只在 completed 时发送，节流合并
+          const line = formatActionLine(event.action, event.phase, event.ok, { detailed: false });
 
           if (event.phase === "started") {
             actionLines.push(line);
@@ -332,10 +329,13 @@ export async function handleMessage(
               actionLines.push(line);
             }
 
-            // incremental 模式：completed 时加入节流缓冲区
-            if (isIncremental && line) {
-              debugLog("bot-core", `enqueue action completed, ok=${event.ok}`);
-              await enqueueActionLine(line);
+            // incremental 模式：completed 时收集到缓冲区（纯标题，不带状态图标）
+            if (isIncremental) {
+              const title = formatActionTitle(event.action);
+              if (title) {
+                debugLog("bot-core", `enqueue action completed, ok=${event.ok}`);
+                pendingActionLines.push(title);
+              }
             }
           }
 
@@ -350,6 +350,8 @@ export async function handleMessage(
         }
 
         case "text_finished": {
+          // 遇到非 action 事件，先 flush action 缓冲区
+          if (isIncremental) await flushActionBatch();
           // agent 一轮文本输出完毕（转去调用工具），将中间文本作为独立消息发送
           debugLog("bot-core", `text_finished: len=${event.text.length}, isIncremental=${isIncremental}`);
           if (isIncremental && event.text) {
@@ -379,19 +381,11 @@ export async function handleMessage(
 
           const elapsed2 = (Date.now() - startTime) / 1000;
           const statusIcon = event.ok ? "✓" : "✗";
-          const header = formatHeader(elapsed2, null, { label: statusIcon, engine: "opencode" });
 
-          // 构建 footer：仅 model 信息（actions 是中间过程，不带入最终消息）
-          const footerParts: string[] = [];
-          if (currentModel) {
-            footerParts.push(`\`model: ${currentModel}\``);
-          }
-
-          // 构建最终消息
+          // 构建最终消息（无 header，footer 包含状态 + 耗时 + model）
           const parts = {
-            header,
             body: finalAnswer || undefined,
-            footer: footerParts.length > 0 ? footerParts.join("\n") : undefined,
+            footer: formatFooter(elapsed2, { label: statusIcon, model: currentModel }),
           };
 
           const messages = prepareMultiMessage(parts);
@@ -434,7 +428,6 @@ export async function handleMessage(
     }
   } catch (err) {
     if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
-    if (actionFlushTimer) { clearTimeout(actionFlushTimer); actionFlushTimer = null; }
     debugError("bot-core", "runner error:", err);
     consola.error("[bot] runner error:", err);
     const errorMsg = err instanceof Error ? err.message : String(err);
@@ -442,7 +435,7 @@ export async function handleMessage(
     if (errorStack) {
       debugError("bot-core", "error stack:", errorStack);
     }
-    const errorMarkdown = `✗ · opencode · error\n${errorMsg}`;
+    const errorMarkdown = `${errorMsg}\n\n✗ · error`;
     if (isIncremental) {
       // incremental 模式：直接发送错误消息
       await thread.post({ markdown: errorMarkdown });

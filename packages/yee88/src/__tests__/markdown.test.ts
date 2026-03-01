@@ -3,6 +3,7 @@ import { test, expect, describe } from "bun:test";
 import {
   formatElapsed,
   formatHeader,
+  formatFooter,
   shorten,
   actionStatus,
   actionSuffix,
@@ -38,14 +39,36 @@ describe("formatElapsed", () => {
 describe("formatHeader", () => {
   test("basic header", () => {
     expect(formatHeader(5, null, { label: "▸", engine: "opencode" })).toBe(
-      "▸ · opencode · 5s"
+      "▸"
     );
   });
 
   test("header with step", () => {
     expect(formatHeader(65, 3, { label: "▸", engine: "opencode" })).toBe(
-      "▸ · opencode · 1m 05s · step 3"
+      "▸ · step 3"
     );
+  });
+});
+
+describe("formatFooter", () => {
+  test("elapsed only", () => {
+    expect(formatFooter(5)).toBe("5s");
+  });
+
+  test("elapsed with label", () => {
+    expect(formatFooter(5, { label: "✓" })).toBe("✓ · 5s");
+  });
+
+  test("elapsed with model", () => {
+    expect(formatFooter(65, { model: "gpt-4" })).toBe("1m 05s · gpt-4");
+  });
+
+  test("elapsed with label and model", () => {
+    expect(formatFooter(65, { label: "✓", model: "gpt-4" })).toBe("✓ · 1m 05s · gpt-4");
+  });
+
+  test("elapsed with null model", () => {
+    expect(formatFooter(10, { model: null })).toBe("10s");
   });
 });
 
@@ -146,15 +169,15 @@ describe("trimBody", () => {
 });
 
 describe("assembleMarkdownParts", () => {
-  test("joins parts with single newline", () => {
+  test("joins parts with double newline", () => {
     expect(assembleMarkdownParts({ header: "H", body: "B", footer: "F" })).toBe(
-      "H\nB\nF"
+      "H\n\nB\n\nF"
     );
   });
 
   test("skips undefined parts", () => {
     expect(assembleMarkdownParts({ header: "H" })).toBe("H");
-    expect(assembleMarkdownParts({ header: "H", body: "B" })).toBe("H\nB");
+    expect(assembleMarkdownParts({ header: "H", body: "B" })).toBe("H\n\nB");
   });
 });
 
@@ -162,7 +185,7 @@ describe("prepareMultiMessage", () => {
   test("single short message", () => {
     const result = prepareMultiMessage({ header: "H", body: "B" });
     expect(result).toHaveLength(1);
-    expect(result[0]).toBe("H\nB");
+    expect(result[0]).toBe("H\n\nB");
   });
 
   test("adds continuation headers for splits", () => {

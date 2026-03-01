@@ -35,6 +35,8 @@ export type Platform = z.infer<typeof PlatformSchema>;
 
 export const AppConfigSchema = z.object({
   default_platform: PlatformSchema.optional(),
+  /** 调试模式：打印详细的请求/响应日志 */
+  debug: z.boolean().default(false),
   telegram: z
     .object({
       bot_token: z.string().optional(),
@@ -56,7 +58,10 @@ export const AppConfigSchema = z.object({
     })
     .default({ reply_mode: "ai_card" as const, allowed_users: [] }),
   default_engine: z.string().default("opencode"),
+  default_model: z.string().optional(),
   default_project: z.string().optional(),
+  /** 是否在消息中显示工具调用（action）信息，默认关闭 */
+  show_actions: z.boolean().default(false),
   system_prompt: z.string().optional(),
   projects: z.record(z.string(), ProjectConfigSchema).default({}),
 });

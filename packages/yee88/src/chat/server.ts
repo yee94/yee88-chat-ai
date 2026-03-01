@@ -6,6 +6,7 @@ import { loadAppConfig, type Platform } from "../config/index.ts";
 import { generateStartupMessage } from "./startup.ts";
 import { TelegramPoller, type TelegramUpdate } from "./polling.ts";
 import { DingTalkStreamClient, TOPIC_ROBOT } from "@chat-adapter/dingtalk";
+import { initDebug, isDebugEnabled, debugLog, debugJson } from "../debug.ts";
 
 export type ServerMode = "webhook" | "polling" | "stream";
 
@@ -29,6 +30,18 @@ export async function startServer(options: ServerOptions = {}) {
   // 加载配置
   const { config, path: cfgPath } = loadAppConfig(options.configPath);
   consola.info(`[server] loaded config from ${cfgPath}`);
+
+  // 初始化调试模式（dev 模式下默认启用）
+  const isDev = process.env.NODE_ENV !== "production";
+  initDebug(config.debug ?? isDev);
+  if (isDebugEnabled()) {
+    debugJson("server", "loaded config", { 
+      platform: config.default_platform,
+      dingtalk_reply_mode: config.dingtalk?.reply_mode,
+      debug: config.debug,
+      isDev,
+    });
+  }
 
   // 平台优先级：命令行参数 > 环境变量 > 配置文件 > 自动检测
   const platform: Platform = options.platform
@@ -124,7 +137,31 @@ export async function startServer(options: ServerOptions = {}) {
       consola.info(`[stream] state: ${state}${error ? ` (${error})` : ""}`);
     });
 
+    // DingTalk 可能对同一条消息发送多次 stream callback，需要在应用层去重
+    const processedMsgIds = new Map<string, number>();
+    const DEDUP_TTL = 5 * 60 * 1000; // 5 分钟
+    const DEDUP_MAX_SIZE = 500;
+
     streamClient.onMessage(async (message, ack) => {
+      const msgId = message.msgId;
+
+      // 去重：同一 msgId 只处理一次
+      if (msgId && processedMsgIds.has(msgId)) {
+        debugLog("stream", `duplicate message skipped: ${msgId}`);
+        ack();
+        return;
+      }
+      if (msgId) {
+        processedMsgIds.set(msgId, Date.now());
+        // 清理过期条目
+        if (processedMsgIds.size > DEDUP_MAX_SIZE) {
+          const cutoff = Date.now() - DEDUP_TTL;
+          for (const [key, ts] of processedMsgIds) {
+            if (ts < cutoff) processedMsgIds.delete(key);
+          }
+        }
+      }
+
       consola.info("[stream] raw message:", JSON.stringify(message).slice(0, 500));
 
       const fakeRequest = new Request("http://localhost/api/webhooks/dingtalk", {
@@ -194,8 +231,8 @@ export async function startServer(options: ServerOptions = {}) {
     consola.info(`[server] webhook URL: http://localhost:${server.port}/api/webhooks/${platform}`);
   }
 
-  // Graceful shutdown
-  process.on("SIGINT", async () => {
+  // 清理函数：热重载和 graceful shutdown 共用
+  const cleanup = async () => {
     consola.info("[server] shutting down...");
     if (poller) {
       poller.stop();
@@ -206,8 +243,14 @@ export async function startServer(options: ServerOptions = {}) {
     await chat.shutdown();
     await stateAdapter.disconnect();
     server.stop();
-    process.exit(0);
-  });
+  };
 
-  return server;
+  // Graceful shutdown
+  const onSigInt = async () => {
+    await cleanup();
+    process.exit(0);
+  };
+  process.on("SIGINT", onSigInt);
+
+  return { server, cleanup, onSigInt };
 }

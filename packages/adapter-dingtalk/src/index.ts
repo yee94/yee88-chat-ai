@@ -48,7 +48,7 @@ import {
   cardToDingTalkActionCard,
   decodeDingTalkCallbackData,
 } from "./cards";
-import { DingTalkFormatConverter } from "./markdown";
+import { DingTalkFormatConverter, normalizeNewlines } from "./markdown";
 import type {
   DingTalkAdapterConfig,
   DingTalkCardCallback,
@@ -338,11 +338,13 @@ export class DingTalkAdapter
 
     const card = extractCard(message);
     const text = this.truncateMessage(
-      convertEmojiPlaceholders(
-        card
-          ? cardToFallbackText(card)
-          : this.formatConverter.renderPostable(message),
-        "gchat",
+      normalizeNewlines(
+        convertEmojiPlaceholders(
+          card
+            ? cardToFallbackText(card)
+            : this.formatConverter.renderPostable(message),
+          "gchat",
+        ),
       ),
     );
 
@@ -622,8 +624,8 @@ export class DingTalkAdapter
     // 2. Recall + resend (if processQueryKey available) - acceptable UX
     // 3. Post new message (fallback) - poor UX (two messages)
 
-    // Extract text content from message
-    const text = this.extractTextContent(message);
+    // Extract text content and normalize newlines for DingTalk markdown
+    const text = normalizeNewlines(this.extractTextContent(message));
 
     // Strategy 1: AI Card streaming (best UX)
     // Check by messageId prefix or cache lookup
@@ -821,7 +823,7 @@ export class DingTalkAdapter
       return;
     }
 
-    const text = this.extractTextContent(message);
+    const text = normalizeNewlines(this.extractTextContent(message));
     const success = await streamAICard(aiCard, text, true, this.logger);
     
     if (success) {

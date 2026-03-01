@@ -18,6 +18,7 @@ interface ThreadState {
   topicTitle: string | null;
   defaultEngine: string | null;
   triggerMode: string | null; // "mentions" | null (all)
+  modelOverride: string | null; // 模型覆盖
 }
 
 /** 顶层 Topic 状态 */
@@ -51,6 +52,7 @@ function newThreadState(): ThreadState {
     topicTitle: null,
     defaultEngine: null,
     triggerMode: null,
+    modelOverride: null,
   };
 }
 
@@ -265,5 +267,23 @@ export class TopicStateStore {
     this.loadIfNeeded();
     const key = threadKey(chatId, threadId);
     return this.state.threads[key]?.triggerMode ?? null;
+  }
+
+  /** 获取模型覆盖 */
+  getModelOverride(chatId: string | number, threadId: string | number): string | null {
+    this.loadIfNeeded();
+    const key = threadKey(chatId, threadId);
+    return this.state.threads[key]?.modelOverride ?? null;
+  }
+
+  /** 设置模型覆盖 */
+  setModelOverride(
+    chatId: string | number,
+    threadId: string | number,
+    model: string | null
+  ): void {
+    const thread = this.ensureThread(chatId, threadId);
+    thread.modelOverride = model;
+    this.save();
   }
 }

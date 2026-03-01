@@ -100,7 +100,7 @@ describe("Integration: Markdown → Multi-message", () => {
 
   test("progress header formatting", () => {
     const header = formatHeader(125, 3, { label: "▸", engine: "opencode" });
-    expect(header).toBe("▸ · opencode · 2m 05s · step 3");
+    expect(header).toBe("▸ · step 3");
   });
 });
 

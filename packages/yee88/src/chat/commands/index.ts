@@ -89,8 +89,10 @@ export async function tryHandleCommand(
 import { handleNew } from "./new.ts";
 import { handleModel } from "./model.ts";
 import { handleHelp } from "./help.ts";
+import { handleTopic } from "./topic.ts";
 
 registerCommand("new", handleNew);
 registerCommand("model", handleModel);
 registerCommand("help", handleHelp);
 registerCommand("start", handleHelp); // /start 也显示帮助
+registerCommand("topic", handleTopic);

@@ -14,6 +14,10 @@ default_project = "myproject"
 # 全局 system prompt（可选）
 system_prompt = "You are a helpful AI assistant."
 
+# 调试模式（可选，默认 false）
+# 开启后打印详细的请求/响应日志，便于排查问题
+debug = false
+
 # ─────────────────────────────────────────────────────────────
 # Telegram 配置
 # ─────────────────────────────────────────────────────────────
@@ -94,6 +98,7 @@ path = "/home/user/projects/another"
 | `default_engine` | string | 否 | 默认引擎，目前仅支持 `opencode` |
 | `default_project` | string | 否 | 默认项目别名 |
 | `system_prompt` | string | 否 | 全局 system prompt |
+| `debug` | boolean | 否 | 调试模式，打印详细的请求/响应日志，默认 `false` |
 
 ### Telegram 配置
 
